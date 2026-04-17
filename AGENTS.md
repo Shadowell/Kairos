@@ -210,6 +210,8 @@ EOF
 | DDP 在 CPU 上跑不起来 | 默认 nccl | `training_utils.setup_ddp` 已自动切 gloo |
 | 办公网封了 OKX / Binance 主站 | GFW + 公司白名单 | 用 `--exchange binance_vision` 走 `data-api.binance.vision` 现货镜像，只能拉现货 K 线（没有 funding/OI/basis） |
 | 用 `binance_vision` 拉出来的 parquet 时间范围偏移 | `_to_unix_ms` 用 naive local time 转 UTC | 预期行为，对 24/7 crypto 不影响训练；真要精确 UTC 日界就手动传完整 ISO 时间 |
+| 本机 macOS `torchrun --standalone` 长时间卡在一堆 `IPv6 ... gai error: 8` 警告 | macOS 对本机 hostname 解析到 IPv6 失败，`torchrun` 的 rendezvous server 挂在主机名上等超时 | 单卡/本机 smoke 不用 torchrun，直接 `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`；AutoDL/GPU 机仍正常用 torchrun |
+| smoke 时 `OneCycleLR` 抛 `ZeroDivisionError: float division by zero` | `total_steps = epochs * steps_per_epoch` 过小时 `int(pct_start * total_steps)` 退化为 0，阶段边界重合 | `KAIROS_SMOKE=1` 已经把 `n_train_iter` 设到 200、`warmup_pct=0.2`，保证 `total_steps ≥ ~50`；自定义 smoke 时也要守这一下限 |
 
 更多见 `docs/AUTODL_GUIDE.md` 的 "常见坑" 一节。
 

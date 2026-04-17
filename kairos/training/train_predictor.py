@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from kairos.models import KronosWithExogenous
-from kairos.training.config import TrainConfig
+from kairos.training.config import TrainConfig, preset_for
 from kairos.training.dataset import AShareKronosDataset
 from kairos.utils import (
     cleanup_ddp,
@@ -181,7 +181,11 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
 
 
 def main():
-    cfg = TrainConfig()
+    preset_name = os.environ.get("KAIROS_PRESET")
+    cfg = TrainConfig(**preset_for(preset_name)) if preset_name else TrainConfig()
+    ds_override = os.environ.get("KAIROS_DATASET")
+    if ds_override:
+        cfg.dataset_path = ds_override
     # Smoke-test overrides for CPU / laptop runs. Activate with KAIROS_SMOKE=1.
     if os.environ.get("KAIROS_SMOKE") == "1":
         cfg.epochs = 1
@@ -189,8 +193,12 @@ def main():
         cfg.num_workers = 0
         cfg.log_interval = 5
         cfg.unfreeze_last_n = 1
-        cfg.n_train_iter = 40     # ≈ 10 batches of size 4
-        cfg.n_val_iter = 20
+        # 200 samples / batch 4 = 50 steps/epoch. OneCycleLR 的分段边界
+        # 对 total_steps < ~20 会触发除零（pct_start * total_steps 被 int()
+        # 截成 0），这里留够余量。
+        cfg.n_train_iter = 200
+        cfg.n_val_iter = 40
+        cfg.warmup_pct = 0.2
     if "WORLD_SIZE" not in os.environ:
         raise RuntimeError("请用 torchrun 启动此脚本")
     rank, world, local = setup_ddp()
