@@ -199,6 +199,31 @@ def main():
         cfg.n_train_iter = 200
         cfg.n_val_iter = 40
         cfg.warmup_pct = 0.2
+    # Generic env overrides — handy for shared-GPU boxes where the default
+    # batch size OOMs, or for quick hyper-param sweeps without editing code.
+    # Values are parsed as int/float on a best-effort basis; unrecognised keys
+    # are ignored so typos fall back to the preset default.
+    _env_overrides = {
+        "KAIROS_BATCH_SIZE": ("batch_size", int),
+        "KAIROS_ACCUM_STEPS": ("accumulation_steps", int),
+        "KAIROS_NUM_WORKERS": ("num_workers", int),
+        "KAIROS_EPOCHS": ("epochs", int),
+        "KAIROS_N_TRAIN_ITER": ("n_train_iter", int),
+        "KAIROS_N_VAL_ITER": ("n_val_iter", int),
+        "KAIROS_LR": ("predictor_learning_rate", float),
+        "KAIROS_UNFREEZE_LAST_N": ("unfreeze_last_n", int),
+        "KAIROS_LOG_INTERVAL": ("log_interval", int),
+    }
+    for env_key, (attr, caster) in _env_overrides.items():
+        val = os.environ.get(env_key)
+        if val is None or val == "":
+            continue
+        try:
+            setattr(cfg, attr, caster(val))
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"{env_key}={val!r} is not a valid {caster.__name__}"
+            ) from e
     if "WORLD_SIZE" not in os.environ:
         raise RuntimeError("请用 torchrun 启动此脚本")
     rank, world, local = setup_ddp()
