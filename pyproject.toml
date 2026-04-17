@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 serve = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.5"]
 train = ["comet-ml>=3.39"]
+crypto = ["ccxt>=4.3", "python-dotenv>=1.0"]
 dev = ["pytest>=7", "ruff>=0.5"]
 
 [project.scripts]

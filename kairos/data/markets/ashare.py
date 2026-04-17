@@ -329,7 +329,7 @@ class AshareAdapter(MarketAdapter):
         return pd.bdate_range(start, end)
 
 
-register_adapter("ashare", AshareAdapter)
+register_adapter("ashare", AshareAdapter, overwrite=True)
 
 
 __all__ = ["AshareAdapter"]

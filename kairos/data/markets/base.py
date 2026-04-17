@@ -65,7 +65,18 @@ class FetchTask:
 
     @property
     def out_path(self) -> Path:
-        return self.out_dir / f"{self.symbol}.parquet"
+        return self.out_dir / f"{sanitize_symbol(self.symbol)}.parquet"
+
+
+def sanitize_symbol(symbol: str) -> str:
+    """Map a venue-native symbol to a filesystem-safe stem.
+
+    A-share codes (``600000``) pass through unchanged. ccxt symbols such as
+    ``BTC/USDT:USDT`` become ``BTC_USDT-USDT`` — the mapping is reversible by
+    convention (first ``/`` → ``_``, first ``:`` → ``-``) and keeps the stem
+    legible when you ``ls raw/crypto/1min``.
+    """
+    return symbol.replace("/", "_").replace(":", "-")
 
 
 class MarketAdapter(ABC):
@@ -110,24 +121,41 @@ class MarketAdapter(ABC):
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-_REGISTRY: Dict[str, Callable[[], MarketAdapter]] = {}
+_REGISTRY: Dict[str, Callable[..., MarketAdapter]] = {}
 
 
-def register_adapter(name: str, factory: Callable[[], MarketAdapter]) -> None:
+def register_adapter(
+    name: str,
+    factory: Callable[..., MarketAdapter],
+    *,
+    overwrite: bool = False,
+) -> None:
     """Register an adapter factory under ``name``.
 
-    Factories are used (instead of instances) so that optional heavy
+    Factories are callables that *may* accept keyword arguments so that
+    dispatchers can forward market-specific configuration (e.g. ``proxy``
+    for crypto venues) without the registry knowing the details.
+
+    Factories are used instead of instances so that optional heavy
     dependencies, such as ``ccxt``, are only imported when the user actually
     selects that market.
+
+    Re-registering the same name is an error by default; pass
+    ``overwrite=True`` if you intentionally want to swap in a different
+    implementation (used mostly by tests that reload the module).
     """
 
-    if name in _REGISTRY:
+    if name in _REGISTRY and not overwrite:
         raise ValueError(f"adapter already registered: {name}")
     _REGISTRY[name] = factory
 
 
-def get_adapter(name: str) -> MarketAdapter:
+def get_adapter(name: str, **kwargs) -> MarketAdapter:
     """Instantiate the adapter registered under ``name``.
+
+    Extra keyword arguments are forwarded to the factory; factories that do
+    not accept them will raise ``TypeError``, which callers can catch to fall
+    back to defaults.
 
     Unknown names raise :class:`ValueError` and list the available adapters so
     users don't have to grep the codebase.
@@ -138,7 +166,13 @@ def get_adapter(name: str) -> MarketAdapter:
         raise ValueError(
             f"unknown market adapter: {name!r}; available: {available}"
         )
-    return _REGISTRY[name]()
+    factory = _REGISTRY[name]
+    try:
+        return factory(**kwargs)
+    except TypeError:
+        if kwargs:
+            return factory()
+        raise
 
 
 def available_adapters() -> List[str]:
@@ -152,4 +186,5 @@ __all__ = [
     "register_adapter",
     "get_adapter",
     "available_adapters",
+    "sanitize_symbol",
 ]

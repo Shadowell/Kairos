@@ -15,15 +15,17 @@ from .base import (
     available_adapters,
     get_adapter,
     register_adapter,
+    sanitize_symbol,
 )
 
 # Trigger adapter registration by importing the concrete modules. We swallow
 # ImportError from optional dependencies so that e.g. ``import kairos.data``
 # still works when only some market backends have their deps installed.
-try:
-    from . import ashare  # noqa: F401
-except ImportError:  # pragma: no cover
-    pass
+for _mod in ("ashare", "crypto"):
+    try:
+        __import__(f"{__name__}.{_mod}")
+    except ImportError:  # pragma: no cover
+        pass
 
 
 __all__ = [
@@ -33,4 +35,5 @@ __all__ = [
     "available_adapters",
     "get_adapter",
     "register_adapter",
+    "sanitize_symbol",
 ]

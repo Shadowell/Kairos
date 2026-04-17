@@ -25,6 +25,7 @@ env/
 raw/
 artifacts/
 outputs/
+finetune/data/
 *.parquet
 *.pkl
 *.safetensors
@@ -34,3 +35,13 @@ comet_ml/
 
 # Hugging Face cache (if accidentally set to project dir)
 hf_cache/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.pem
+*.key
+~/.kairos/

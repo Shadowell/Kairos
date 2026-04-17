@@ -181,6 +181,17 @@ def parse_args() -> argparse.Namespace:
         default="qfq",
         help="复权方式（A 股专用），非 A 股市场可忽略",
     )
+    p.add_argument(
+        "--proxy",
+        default=None,
+        help="HTTP(S) proxy URL, e.g. http://127.0.0.1:7890 (crypto only; "
+        "falls back to HTTPS_PROXY/HTTP_PROXY env vars)",
+    )
+    p.add_argument(
+        "--exchange",
+        default=None,
+        help="crypto venue override, e.g. okx (default) / binance (when added)",
+    )
     p.add_argument("--out", default="./raw/daily")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument(
@@ -200,7 +211,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    adapter = get_adapter(args.market)
+    adapter_kwargs = {}
+    if args.proxy:
+        adapter_kwargs["proxy"] = args.proxy
+    if args.exchange:
+        adapter_kwargs["exchange"] = args.exchange
+    adapter = get_adapter(args.market, **adapter_kwargs)
 
     if args.freq not in adapter.supported_freqs:
         raise SystemExit(

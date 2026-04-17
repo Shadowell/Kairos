@@ -13,8 +13,8 @@
 
 ## ✨ 特性
 
-- **数据** — 基于 akshare 的 A 股日/分钟 K 线采集（多源 + 断点续传 + 日度累积）
-- **因子** — 32 维技术/量价/日历/相对指数因子，无未来信息泄漏
+- **多市场数据层** — 统一 `MarketAdapter` 抽象，内置 A 股（akshare 多源 fallback）和加密货币（ccxt，默认 OKX 永续）两个 adapter，可扩展到 Binance/Bybit/外汇/黄金等
+- **因子** — 32 维技术/量价/日历/相对指数因子，无未来信息泄漏；市场相关因子（`turnover`、`funding_rate` 等）由 adapter 贡献
 - **模型** — `KronosWithExogenous`：在 Kronos 之上加外生变量旁路通道 + 可选分位回归头，**完全兼容预训练权重**
 - **训练** — `torchrun` 启动的 DDP 训练，支持渐进解冻、pinball loss
 - **部署** — 一键 push 到 Hugging Face Hub + FastAPI 实时推理服务
@@ -66,15 +66,27 @@ pip install -e '.[serve,train]'
 
 要求：Python ≥ 3.10，PyTorch ≥ 2.0。
 
-### 1. 采集 A 股日线（CSI300 全历史）
+### 1. 采集数据
+
+Kairos 的数据层通过 `--market` 参数选择市场 adapter（默认 `ashare`）：
 
 ```bash
+# A 股（默认，原有行为不变）
 kairos-collect --universe csi300 --freq daily \
     --start 2018-01-01 --adjust qfq --out ./raw/daily
 
 # 指数数据，用于相对收益因子
 kairos-collect --universe 000300 --freq daily --adjust qfq --out ./raw/index
+
+# 加密货币（OKX USDT 永续）—— 需要先装 crypto 额外依赖
+pip install -e '.[crypto]'
+kairos-collect --market crypto \
+    --universe "BTC/USDT:USDT,ETH/USDT:USDT" \
+    --freq 1min --start 2023-01-01 --end 2025-01-01 \
+    --out ./raw/crypto/1min --workers 1
 ```
+
+完整加密货币工作流（代理、API key、自定义交易所）见 [docs/CRYPTO_GUIDE.md](docs/CRYPTO_GUIDE.md)。
 
 ### 2. 生成训练集
 
@@ -148,14 +160,17 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 ```
 Kairos/
 ├── README.md / LICENSE / pyproject.toml / requirements.txt
+├── AGENTS.md                       ← AI coding agent 的仓库操作手册
 ├── docs/
 │   ├── GLOSSARY.md                 ← 术语速查（新手先看这个）
 │   ├── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）
-│   └── AUTODL_GUIDE.md             ← AutoDL 租卡训练端到端流程
+│   ├── AUTODL_GUIDE.md             ← AutoDL 租卡训练端到端流程
+│   └── CRYPTO_GUIDE.md             ← 加密货币数据层 & 交易所扩展指南
 ├── kairos/                         ← Python 包
 │   ├── __init__.py                 ← 顶层 re-export
 │   ├── data/
-│   │   ├── collect.py              ← akshare 采集
+│   │   ├── collect.py              ← 多市场 CLI dispatcher
+│   │   ├── markets/                ← MarketAdapter 抽象 + ashare / crypto 实现
 │   │   ├── features.py             ← 32 维因子工程
 │   │   └── prepare_dataset.py      ← 生成 Kronos pkl
 │   ├── models/
