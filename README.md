@@ -131,6 +131,10 @@ curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -
 
 Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md)。
 
+本地 Mac（无 CUDA）→ AutoDL 云端 GPU 的完整租卡训练流程见 [docs/AUTODL_GUIDE.md](docs/AUTODL_GUIDE.md)。
+
+> 📖 **第一次接触这些名词？** 先读 [docs/GLOSSARY.md](docs/GLOSSARY.md) —— 从 K 线到 Transformer 到 IC，全部术语带例子解释。
+
 | 方案 | 做法 | 成本 | 复用预训练 |
 |---|---|---|---|
 | **A：外生旁路通道** | 32 维因子 `Linear→SiLU→Linear→gate` 加到 token embedding | 低 | ✅ 完全兼容 |
@@ -145,7 +149,9 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 Kairos/
 ├── README.md / LICENSE / pyproject.toml / requirements.txt
 ├── docs/
-│   └── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）
+│   ├── GLOSSARY.md                 ← 术语速查（新手先看这个）
+│   ├── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）
+│   └── AUTODL_GUIDE.md             ← AutoDL 租卡训练端到端流程
 ├── kairos/                         ← Python 包
 │   ├── __init__.py                 ← 顶层 re-export
 │   ├── data/
