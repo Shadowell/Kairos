@@ -318,6 +318,35 @@ python -m kairos.training.backtest_ic \
 symbols, bucket by `date` (one cross-section per day); with a broader
 universe you can bump to `hour` or `minute`.
 
+### 8.1 Running on AutoDL end-to-end
+
+The repo ships two scripts that wrap the full flow:
+
+```bash
+# On the Mac: pack code via git-archive + dataset tar.gz, scp to instance
+scripts/package_and_upload.sh <PORT> <HOST> data/crypto/bv_1min_2y
+
+# On the AutoDL box (after ssh):
+cd /root/autodl-tmp
+mkdir -p Kairos && tar xzf kairos_code.tar.gz -C Kairos
+cd Kairos
+bash scripts/autodl_bootstrap.sh /root/autodl-tmp/bv_1min_2y.tar.gz
+```
+
+`autodl_bootstrap.sh` is idempotent:
+
+1. clears AutoDL's academic-turbo proxy env (otherwise it hijacks
+   `hf-mirror.com`),
+2. creates `.venv`, runs `pip install -e '.[train]'`, pins `numpy<2`,
+3. writes `HF_ENDPOINT` + `HF_HOME` into `~/.bashrc`,
+4. extracts the dataset tarball and verifies `meta.json`,
+5. runs a short `KAIROS_SMOKE=1` + `KAIROS_PRESET=crypto-1min` training
+   end-to-end. If smoke passes, it prints the exact `tmux` command to
+   kick off the real training.
+
+Typical real-run cost on RTX 5090 32GB, BTC+ETH 1min, 2 years of data,
+`crypto-1min` preset, 15 epochs: **~2–3h, ¥6–10**.
+
 ---
 
 ## 9. Roadmap
