@@ -36,7 +36,8 @@ Kairos 是 [Kronos](https://github.com/shiyu-coder/Kronos) 基础模型在 **A �
 ```
 Kairos/
 ├── kairos/                     # 源代码（唯一的 Python 包）
-│   ├── data/                   # collect / features / prepare_dataset
+│   ├── data/                   # collect (dispatcher) / features / prepare_dataset
+│   │   └── markets/            # 每个市场一个 adapter：base / ashare / crypto ...
 │   ├── models/                 # KronosWithExogenous 等
 │   ├── training/               # train_predictor / backtest_ic / dataset / config
 │   ├── deploy/                 # push_to_hf / serve
