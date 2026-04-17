@@ -37,7 +37,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from kairos.data.features import EXOG_COLS, build_features
+from kairos.data.features import build_features, exog_cols_for
+from kairos.data.markets import sanitize_symbol
 
 
 KRONOS_FEATURES = ["open", "high", "low", "close", "vol", "amt"]
@@ -92,6 +93,8 @@ def process_symbol(
     interleave_val_ratio: float = 0.15,
     interleave_block_days: int = 20,
     rng: Optional[np.random.Generator] = None,
+    market: str = "ashare",
+    exog_cols: Optional[list[str]] = None,
 ):
     """Build per-symbol train/val/test frames.
 
@@ -114,13 +117,14 @@ def process_symbol(
     if "amount" in df.columns and df["amount"].isna().all():
         df["amount"] = df["close"] * df["volume"]
 
-    df = build_features(df, index_df)
+    df = build_features(df, index_df, market=market, symbol=path.stem)
 
     # Kronos 期待列名 vol/amt（对齐 finetune/config.py feature_list）
     df = df.rename(columns={"volume": "vol", "amount": "amt"})
 
     main_cols = KRONOS_FEATURES
-    exog_cols = EXOG_COLS
+    if exog_cols is None:
+        exog_cols = exog_cols_for(market)
 
     df = df.set_index("datetime")
 
@@ -181,7 +185,15 @@ def main():
     ap.add_argument("--block-days", type=int, default=20,
                     help="interleave 模式下每块的天数（约一个月交易日）")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--market", default="ashare",
+                    help="which MarketAdapter to use for the feature builder "
+                         "(default: ashare; set to 'crypto' for OKX perps, "
+                         "etc.). The adapter dictates which 8 market-specific "
+                         "columns join the 24 common ones in the exog vector.")
     args = ap.parse_args()
+
+    exog_cols = exog_cols_for(args.market)
+    print(f"[market] {args.market}; exog_dim={len(exog_cols)}")
 
     raw_dir = Path(args.raw).expanduser().resolve()
     out_dir = Path(args.out).expanduser().resolve()
@@ -228,6 +240,8 @@ def main():
                 interleave_val_ratio=args.val_ratio,
                 interleave_block_days=args.block_days,
                 rng=sub_rng,
+                market=args.market,
+                exog_cols=exog_cols,
             )
         except Exception as e:
             print(f"[{sym}] 失败: {e}")
@@ -255,6 +269,24 @@ def main():
     _dump(exog_train, "exog_train.pkl")
     _dump(exog_val, "exog_val.pkl")
     _dump(exog_test, "exog_test.pkl")
+
+    # Lightweight dataset manifest so downstream consumers (training,
+    # backtest) can recover what market/exog schema produced this bundle.
+    import json
+
+    meta = {
+        "market": args.market,
+        "exog_cols": exog_cols,
+        "split_mode": args.split_mode,
+        "ranges": {
+            "train": args.train,
+            "val": args.val,
+            "test": args.test,
+        },
+    }
+    with open(out_dir / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
     print(f"完成: {out_dir}")
 
 

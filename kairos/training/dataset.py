@@ -1,4 +1,4 @@
-"""PyTorch dataset for A-share K-line + exogenous factors.
+"""PyTorch dataset for K-line + exogenous factors (market-agnostic).
 
 Reads pickle files produced by :mod:`kairos.data.prepare_dataset`:
 
@@ -9,6 +9,13 @@ Reads pickle files produced by :mod:`kairos.data.prepare_dataset`:
         exog_train.pkl    # {symbol: DataFrame[<EXOG_COLS>]} aligned by datetime index
         exog_val.pkl
         exog_test.pkl
+        meta.json         # optional, produced by kairos-prepare; records the
+                          #   market / freq / exog schema
+
+The dataset itself makes no market-specific assumptions: time features and
+standardisation are applied identically regardless of whether the bars are
+daily A-share candles or 1-minute BTC/USDT perp bars. The pickle layout is
+shared so a single trainer works for both.
 """
 
 from __future__ import annotations
@@ -26,8 +33,12 @@ from torch.utils.data import Dataset
 from kairos.training.config import TrainConfig
 
 
-class AShareKronosDataset(Dataset):
-    """Sliding-window dataset for Kronos training on A-share data."""
+class KronosSequenceDataset(Dataset):
+    """Sliding-window dataset for Kronos training on any K-line market.
+
+    The historical name :class:`AShareKronosDataset` is kept as an alias at
+    the bottom of the module for backward compatibility.
+    """
 
     def __init__(self, split: str, cfg: TrainConfig):
         if split not in ("train", "val"):
@@ -118,3 +129,12 @@ class AShareKronosDataset(Dataset):
             torch.from_numpy(x_stamp),
             torch.from_numpy(exog_win),
         )
+
+
+# Backwards-compatible alias. Historical call sites (training scripts,
+# external notebooks) import ``AShareKronosDataset`` by name; keep it working
+# so the crypto rollout stays a non-breaking change.
+AShareKronosDataset = KronosSequenceDataset
+
+
+__all__ = ["KronosSequenceDataset", "AShareKronosDataset"]

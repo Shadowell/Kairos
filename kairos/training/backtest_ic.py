@@ -30,8 +30,47 @@ import torch
 from scipy.stats import pearsonr, spearmanr
 
 from kairos.models import KronosWithExogenous
-from kairos.training.config import TrainConfig
+from kairos.training.config import TrainConfig, preset_for
 from kairos.vendor.kronos import KronosTokenizer
+
+
+def _load_dataset_meta(dataset_path: str | Path) -> dict:
+    """Load ``meta.json`` produced by ``kairos-prepare``.
+
+    Returns an empty dict if no manifest is present (e.g. for legacy
+    A-share bundles created before the multi-market refactor), which keeps
+    the backtest backward-compatible.
+    """
+    path = Path(dataset_path) / "meta.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+_BUCKET_ALIASES = {
+    "date": "date",
+    "day": "date",
+    "daily": "date",
+    "hour": "hour",
+    "hourly": "hour",
+    "minute": "minute",
+    "minutely": "minute",
+    "none": "none",
+    "pool": "none",
+}
+
+
+def _bucket_label(date: pd.Timestamp, bucket: str) -> pd.Timestamp | str:
+    if bucket == "date":
+        return date.normalize()
+    if bucket == "hour":
+        return date.floor("h")
+    if bucket == "minute":
+        return date.floor("min")
+    return "pool"
 
 
 def _build_window_features(
@@ -58,9 +97,28 @@ def run_backtest(
     max_symbols: int | None = None,
     device: str | None = None,
     use_baseline: bool = False,
+    aggregation: str = "auto",
 ) -> Dict:
     device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"[device] {device_t}")
+
+    # Pick an aggregation bucket. "auto" picks the bucket that keeps the
+    # cross-section non-trivial: daily bars on A-share → by calendar date;
+    # 1-minute crypto with a handful of symbols → also by calendar date
+    # (aggregating by minute would leave 1-2 rows per bucket). Advanced
+    # users can override this from the CLI.
+    bucket_key = _BUCKET_ALIASES.get(aggregation.lower(), aggregation.lower())
+    if bucket_key == "auto":
+        if cfg.freq and cfg.freq.lower() in {"1min", "3min", "5min", "15min"}:
+            bucket_key = "date"  # intraday bars → daily cross-section
+        else:
+            bucket_key = "date"
+    if bucket_key not in {"date", "hour", "minute", "none"}:
+        raise ValueError(
+            f"Unknown aggregation bucket {aggregation!r}; "
+            "use one of: auto, date, hour, minute, none"
+        )
+    print(f"[bucket] {bucket_key} (market={cfg.market}, freq={cfg.freq})")
 
     print(f"[load] tokenizer: {cfg.pretrained_tokenizer_path}")
     tok = KronosTokenizer.from_pretrained(cfg.pretrained_tokenizer_path).eval().to(device_t)
@@ -161,7 +219,12 @@ def run_backtest(
             close_raw = df["close"].values
             pivot_idx = end - 1
             c0 = close_raw[pivot_idx]
-            meta = {"symbol": sym, "date": pd.Timestamp(df["datetime"].iloc[pivot_idx])}
+            pivot_dt = pd.Timestamp(df["datetime"].iloc[pivot_idx])
+            meta = {
+                "symbol": sym,
+                "date": pivot_dt,
+                "bucket": _bucket_label(pivot_dt, bucket_key),
+            }
             for h in horizons:
                 cf = close_raw[pivot_idx + h]
                 meta[f"ret_h{h}"] = float(np.log(cf / c0))
@@ -210,8 +273,10 @@ def run_backtest(
             "hit_rate": float(((sub[score_col] > 0) == (sub[ret_col] > 0)).mean()),
         }
 
-        # 每日 cross-sectional IC，再求均值
-        daily_ic = df_rec.dropna(subset=[score_col, ret_col]).groupby("date").apply(
+        # Cross-sectional IC per bucket (date / hour / minute / pool),
+        # then averaged — this is the number that matters in production
+        # because it reflects ability to *rank* names at one point in time.
+        bucket_ic = df_rec.dropna(subset=[score_col, ret_col]).groupby("bucket").apply(
             lambda g: pd.Series({
                 "pearson": pearsonr(g[score_col], g[ret_col]).statistic
                 if len(g) > 2 and g[score_col].std() > 0 and g[ret_col].std() > 0 else np.nan,
@@ -220,15 +285,16 @@ def run_backtest(
                 "n": len(g),
             }), include_groups=False,
         )
-        ic_mean = daily_ic["pearson"].mean()
-        ric_mean = daily_ic["spearman"].mean()
-        ic_std = daily_ic["pearson"].std()
+        ic_mean = bucket_ic["pearson"].mean()
+        ric_mean = bucket_ic["spearman"].mean()
+        ic_std = bucket_ic["pearson"].std()
         icir = ic_mean / (ic_std + 1e-9)
         report["by_date_mean"][f"h{h}"] = {
             "ic": float(ic_mean),
             "rank_ic": float(ric_mean),
             "icir": float(icir),
-            "n_dates": int(daily_ic["pearson"].notna().sum()),
+            "n_dates": int(bucket_ic["pearson"].notna().sum()),
+            "bucket": bucket_key,
         }
 
     return report
@@ -244,9 +310,41 @@ def main():
     ap.add_argument("--horizons", default="1,5", help="comma-separated list")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--max-symbols", type=int, default=None)
+    ap.add_argument("--market", default=None,
+                    help="override market preset (ashare/crypto/...); "
+                         "default: read from dataset meta.json or fall back "
+                         "to the TrainConfig default (ashare).")
+    ap.add_argument("--dataset-path", default=None,
+                    help="override TrainConfig.dataset_path when pointing "
+                         "the backtest at a specific prepared bundle")
+    ap.add_argument("--preset", default=None,
+                    help="named preset from kairos.training.config.preset_for "
+                         "(e.g. 'crypto-1min'); overrides --market/freq")
+    ap.add_argument("--aggregation", default="auto",
+                    help="cross-sectional bucket: auto / date / hour / minute / none")
     args = ap.parse_args()
 
-    cfg = TrainConfig()
+    overrides: dict = {}
+    if args.preset:
+        overrides.update(preset_for(args.preset))
+    if args.dataset_path:
+        overrides["dataset_path"] = args.dataset_path
+    if args.market:
+        overrides["market"] = args.market
+
+    cfg = TrainConfig(**overrides) if overrides else TrainConfig()
+
+    # Auto-hydrate market/freq from the dataset manifest when the user
+    # didn't override them. This keeps backtest_ic usable as
+    #     python -m kairos.training.backtest_ic --ckpt ...
+    # regardless of which market produced the bundle.
+    meta = _load_dataset_meta(cfg.dataset_path)
+    if meta:
+        if "market" in meta and "market" not in overrides:
+            cfg.market = meta["market"]
+        if "freq" in meta and "freq" not in overrides:
+            cfg.freq = meta["freq"]
+
     horizons = [int(h) for h in args.horizons.split(",")]
     report = run_backtest(
         args.ckpt, cfg,
@@ -254,6 +352,7 @@ def main():
         batch_size=args.batch_size,
         max_symbols=args.max_symbols,
         use_baseline=args.baseline,
+        aggregation=args.aggregation,
     )
 
     out_p = Path(args.out)

@@ -179,6 +179,148 @@ class OkxExchange(CryptoExchange):
         return self.normalise_frame(df)
 
     # ------------------------------------------------------------------
+    # Optional exogenous channels (funding / OI / spot)
+    # ------------------------------------------------------------------
+    # These helpers are *not* part of the core MarketAdapter contract — the
+    # crypto adapter calls them opportunistically to enrich the exog vector.
+    # They're intentionally thin wrappers around ccxt so the heavy lifting
+    # (pagination, schema normalisation) lives in one place.
+    def fetch_funding_rate_history(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        page_limit: int = 100,
+    ) -> pd.DataFrame:
+        """Fetch historical funding rates for a perpetual swap.
+
+        Returns a DataFrame indexed by datetime with a single ``funding_rate``
+        column. OKX settles funding every 8h, so expect ~3 rows per day.
+
+        Notes
+        -----
+        * Uses ``ccxt.fetchFundingRateHistory`` which forwards to
+          ``GET /api/v5/public/funding-rate-history`` on OKX.
+        * ccxt returns a list of dicts with ``timestamp`` + ``fundingRate``.
+        * Paginates forward from ``start_ms`` until ``end_ms``; OKX caps
+          at 100 records per call.
+        """
+
+        if not self._ccxt.has.get("fetchFundingRateHistory"):
+            raise RuntimeError(
+                "This ccxt build doesn't expose fetchFundingRateHistory; "
+                "upgrade ccxt or implement the raw /public/funding-rate-history "
+                "call directly."
+            )
+
+        rows: list[dict] = []
+        cursor = start_ms
+        while cursor < end_ms:
+            batch = self._ccxt.fetch_funding_rate_history(
+                symbol=symbol, since=cursor, limit=page_limit
+            )
+            if not batch:
+                break
+            rows.extend(batch)
+            last_ts = batch[-1]["timestamp"]
+            if last_ts <= cursor:
+                break
+            cursor = last_ts + 1
+
+        if not rows:
+            return pd.DataFrame(columns=["funding_rate"])
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": r["timestamp"],
+                    "funding_rate": float(r.get("fundingRate", 0.0)),
+                }
+                for r in rows
+                if start_ms <= r["timestamp"] < end_ms
+            ]
+        )
+        df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(None)
+        df = df.drop_duplicates("datetime").sort_values("datetime")
+        return df.set_index("datetime")[["funding_rate"]]
+
+    def fetch_open_interest_history(
+        self,
+        symbol: str,
+        freq: str,
+        start_ms: int,
+        end_ms: int,
+    ) -> pd.DataFrame:
+        """Fetch historical open-interest snapshots for a perpetual swap.
+
+        Returns a DataFrame indexed by datetime with a single
+        ``open_interest`` column (contract count, as OKX reports).
+
+        OKX exposes ``GET /api/v5/rubik/stat/contracts/open-interest-history``;
+        ccxt wraps this as ``fetchOpenInterestHistory``.
+        """
+
+        if not self._ccxt.has.get("fetchOpenInterestHistory"):
+            raise RuntimeError(
+                "This ccxt build doesn't expose fetchOpenInterestHistory; "
+                "upgrade ccxt (≥ 4.3) or call the OKX endpoint directly."
+            )
+        if freq not in _FREQ_TO_TIMEFRAME:
+            raise ValueError(f"freq {freq!r} not supported; see {list(_FREQ_TO_TIMEFRAME)}")
+
+        tf = _FREQ_TO_TIMEFRAME[freq]
+        rows = self._ccxt.fetch_open_interest_history(
+            symbol=symbol,
+            timeframe=tf,
+            since=start_ms,
+            limit=min(500, (end_ms - start_ms) // _TIMEFRAME_MS[tf] + 1),
+        )
+        if not rows:
+            return pd.DataFrame(columns=["open_interest"])
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": r["timestamp"],
+                    "open_interest": float(
+                        r.get("openInterestAmount")
+                        or r.get("openInterestValue")
+                        or r.get("openInterest")
+                        or 0.0
+                    ),
+                }
+                for r in rows
+                if start_ms <= r["timestamp"] < end_ms
+            ]
+        )
+        df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(None)
+        df = df.drop_duplicates("datetime").sort_values("datetime")
+        return df.set_index("datetime")[["open_interest"]]
+
+    def fetch_spot_ohlcv(
+        self,
+        symbol: str,
+        freq: str,
+        start_ms: int,
+        end_ms: int,
+    ) -> pd.DataFrame:
+        """Fetch spot-market OHLCV for basis computation.
+
+        ``symbol`` should be the *spot* ccxt symbol (e.g. ``"BTC/USDT"``),
+        not the perp form. We temporarily flip ``options.defaultType`` to
+        ``"spot"`` so ccxt routes to the right OKX endpoint, then restore
+        the prior setting.
+        """
+
+        prev = self._ccxt.options.get("defaultType")
+        try:
+            self._ccxt.options["defaultType"] = "spot"
+            return self.fetch_ohlcv(symbol, freq, start_ms, end_ms)
+        finally:
+            if prev is None:
+                self._ccxt.options.pop("defaultType", None)
+            else:
+                self._ccxt.options["defaultType"] = prev
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
     def _fetch_ohlcv_with_retry(

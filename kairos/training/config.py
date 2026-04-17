@@ -14,6 +14,16 @@ from typing import List
 class TrainConfig:
     # ---------------- Data & Features ----------------
     dataset_path: str = "./finetune/data/processed_datasets"
+    #: Which market produced the dataset. Used by the feature builder to
+    #: pick the right 8 market-specific exog columns and by training-side
+    #: heuristics (e.g. default ``return_horizon``). Must match what was
+    #: passed to ``kairos-prepare --market``; falls back to the value in
+    #: ``<dataset_path>/meta.json`` if present.
+    market: str = "ashare"
+    #: Native bar frequency of the dataset (``daily`` / ``1min`` / ...).
+    #: Mostly a documentation hint right now, but the backtest script uses
+    #: it to pick a reasonable cross-sectional aggregation rule.
+    freq: str = "daily"
     lookback_window: int = 90
     predict_window: int = 10
     max_context: int = 512
@@ -64,3 +74,59 @@ class TrainConfig:
     ce_weight: float = 0.5
     quantile_weight: float = 2.0
     unfreeze_last_n: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Market-aware presets
+# ---------------------------------------------------------------------------
+# The A-share daily baseline is the status quo; crypto-1min inherits most of
+# it but shifts a few knobs that differ meaningfully at minute cadence:
+#   - ``return_horizon`` bumps to 30 bars (~30 minutes) so the regression
+#     head targets a window large enough to wash out microstructure noise.
+#   - ``freq`` is flagged so the backtest can aggregate by calendar minute
+#     instead of trading day.
+#   - ``predict_window`` is widened to match the longer return horizon.
+_PRESETS: dict[str, dict] = {
+    "ashare-daily": {
+        "market": "ashare",
+        "freq": "daily",
+    },
+    "crypto-1min": {
+        "market": "crypto",
+        "freq": "1min",
+        "lookback_window": 256,
+        "predict_window": 32,
+        "return_horizon": 30,
+        # Crypto bars are noisier per unit time; a slightly larger CE weight
+        # biases the model toward faithfully reproducing the token
+        # distribution before leaning on the quantile regression head.
+        "ce_weight": 0.7,
+        "quantile_weight": 1.5,
+    },
+}
+
+
+def preset_for(name: str) -> dict:
+    """Return a parameter dict for the named preset.
+
+    Usage::
+
+        cfg = TrainConfig(**preset_for("crypto-1min"),
+                          dataset_path="./finetune/data/crypto_1min")
+
+    Unknown names raise ``KeyError`` so typos surface immediately. This is
+    a deliberately thin layer: it exists so downstream configs can pick up
+    a reasonable default without copy-pasting the same overrides.
+    """
+
+    try:
+        return dict(_PRESETS[name])
+    except KeyError as e:
+        raise KeyError(
+            f"Unknown preset {name!r}; available: {list(_PRESETS)}"
+        ) from e
+
+
+def available_presets() -> list[str]:
+    """Return the list of preset names known to :func:`preset_for`."""
+    return list(_PRESETS)

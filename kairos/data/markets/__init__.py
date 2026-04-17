@@ -11,6 +11,7 @@ from __future__ import annotations
 from .base import (
     STD_COLS,
     FetchTask,
+    FeatureContext,
     MarketAdapter,
     available_adapters,
     get_adapter,
@@ -31,6 +32,7 @@ for _mod in ("ashare", "crypto"):
 __all__ = [
     "STD_COLS",
     "FetchTask",
+    "FeatureContext",
     "MarketAdapter",
     "available_adapters",
     "get_adapter",

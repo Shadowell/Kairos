@@ -570,8 +570,29 @@ pretrained_predictor_path = "NeoQuasar/Kronos-small"
 
 ---
 
+## 多市场架构术语（Phase 2 新增）
+
+| 名词 | 一句话解释 | 代码入口 |
+|---|---|---|
+| `MarketAdapter` | 每个市场（A 股、加密、外汇...）都有一个 adapter，负责 `list_symbols` / `fetch_ohlcv` / `trading_calendar` / `market_features` | `kairos/data/markets/base.py` |
+| `CryptoExchange` | 在 crypto adapter 下面再分一层，具体的交易所（OKX、Binance...）实现，通过 ccxt 统一接入 | `kairos/data/markets/crypto_exchanges/base.py` |
+| `COMMON_EXOG_COLS` | 跨市场通用的 24 维因子（收益、RSI、MACD、波动、均线、布林、量价、微结构、pad） | `kairos/data/common_features.py` |
+| `MARKET_EXOG_COLS` | 各 adapter 贡献的 8 维市场特征；A 股是换手/日历/超额收益，crypto 是 funding/OI/basis/dominance/小时三角 + pad | 各 adapter 的类属性 |
+| `FeatureContext` | 特征计算时的 side channel——A 股用它传指数 K 线，crypto 用它传 funding / OI / spot 价；adapter 自取所需 | `kairos/data/markets/base.py` |
+| `meta.json` | `kairos-prepare` 在输出目录里落盘的数据集清单（market / freq / exog_cols / ranges），训练和回测侧自动读取 | `kairos/data/prepare_dataset.py` |
+| `preset_for("crypto-1min")` | 返回一组针对 1min crypto 调好的 `TrainConfig` 超参（`lookback=256`, `horizon=30`, `ce_weight=0.7`...）的字典 | `kairos/training/config.py` |
+| `aggregation`（回测） | cross-sectional IC 按什么粒度聚合：`date` / `hour` / `minute` / `none` | `kairos/training/backtest_ic.py` |
+
+**关键不变式**：
+- `len(COMMON_EXOG_COLS) + len(adapter.MARKET_EXOG_COLS) == 32`
+  任何新 adapter 都必须保证这一点，否则 `build_features` 直接抛错。
+- 模型的 `n_exog=32` 不变，所以老的 A 股 checkpoint 能被 crypto 数据直接加载做 ablation（输入 shape 对得上，只是语义不同）。
+
+---
+
 ## 延伸阅读（项目内）
 
 - [AUTODL_GUIDE.md](AUTODL_GUIDE.md) — AutoDL 上整套部署流程
 - [TUNING_PLAYBOOK.md](TUNING_PLAYBOOK.md) — 调参实战手册
+- [CRYPTO_GUIDE.md](CRYPTO_GUIDE.md) — 加密市场接入与训练指引
 - [../artifacts/autodl_run_v2_20260417/train_summary.md](../artifacts/autodl_run_v2_20260417/train_summary.md) — v2 本次报告

@@ -23,7 +23,7 @@ CLI callers can simply pass ``--market ashare`` / ``--market crypto``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -49,6 +49,29 @@ Columns that a given market cannot provide (e.g. ``turnover`` for crypto)
 should be present with ``NaN`` values so that downstream code can rely on a
 stable schema.
 """
+
+
+@dataclass
+class FeatureContext:
+    """Auxiliary data the feature pipeline may hand to adapters.
+
+    This is a grab-bag on purpose: different markets need different side
+    channels (A-shares want an index K-line for relative returns, crypto
+    wants funding/OI history keyed by ccxt symbol, ...), and forcing every
+    adapter to accept a fixed argument list would either explode into 20
+    keyword arguments or pollute the base class.
+    """
+
+    #: Adapter-native symbol currently being processed, e.g. ``"600000"`` or
+    #: ``"BTC/USDT:USDT"``. Adapters use this to look up per-symbol auxiliary
+    #: series inside ``extras``.
+    symbol: str | None = None
+    #: Optional reference index K-line (used by A-shares for excess return).
+    index_df: pd.DataFrame | None = None
+    #: Free-form adapter-specific payload (crypto funding history, OI,
+    #: spot-vs-perp basis, ...). Adapters are expected to know their own
+    #: keys; unknown keys are ignored.
+    extras: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -107,15 +130,42 @@ class MarketAdapter(ABC):
         markets (A-shares) it should exclude non-trading days and lunch breaks.
         """
 
-    def market_features(self, df: pd.DataFrame) -> pd.DataFrame:  # noqa: D401
+    #: Canonical list of market-specific feature names the adapter produces.
+    #: Concrete adapters override this. ``build_features`` relies on the
+    #: length being exactly ``n_exog - len(COMMON_EXOG_COLS)`` so the final
+    #: exog vector has a stable dimension (32 by default) across markets.
+    MARKET_EXOG_COLS: tuple[str, ...] = ()
+
+    def market_features(  # noqa: D401
+        self,
+        df: pd.DataFrame,
+        *,
+        context: "FeatureContext | None" = None,
+    ) -> pd.DataFrame:
         """Return market-specific exogenous features as additional columns.
 
-        The default implementation returns an empty DataFrame (no extra
-        factors). Concrete adapters override this to plug in e.g. ``turnover``
-        stats for A-shares or ``funding_rate`` for crypto perps.
+        The default implementation fills ``MARKET_EXOG_COLS`` with zeros so
+        that every adapter contributes the same vector width even if the
+        venue doesn't expose (or hasn't wired up) certain factors yet.
+        Concrete adapters override this to plug in e.g. ``turnover`` for
+        A-shares or ``funding_rate`` for crypto perps.
+
+        Parameters
+        ----------
+        df : DataFrame
+            Input OHLCV window. Adapters should not mutate it; return a
+            *new* frame with the same row index and only the extra columns
+            in :attr:`MARKET_EXOG_COLS`.
+        context : FeatureContext, optional
+            Auxiliary data the pipeline may pass in (e.g. the index K-line
+            for A-share excess returns, or funding-rate history for crypto).
+            Adapters that don't need it can ignore it.
         """
 
-        return pd.DataFrame(index=df.index)
+        out = pd.DataFrame(index=df.index)
+        for col in self.MARKET_EXOG_COLS:
+            out[col] = 0.0
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +232,7 @@ def available_adapters() -> List[str]:
 __all__ = [
     "STD_COLS",
     "FetchTask",
+    "FeatureContext",
     "MarketAdapter",
     "register_adapter",
     "get_adapter",

@@ -4,6 +4,8 @@
 >
 > 📖 **读不懂术语？** 先去 [GLOSSARY.md](GLOSSARY.md) 查 IC、Rank-IC、过拟合、分布偏移、早停、teacher forcing 等词的意思。
 >
+> 🪙 **要做加密市场？** 本手册聚焦 A 股；加密版的数据采集、预设超参、训练入口见 [CRYPTO_GUIDE.md](CRYPTO_GUIDE.md)。核心超参之外的配置（`market=crypto`、`freq=1min`、`lookback=256`、`return_horizon=30`）都走 `kairos.training.config.preset_for("crypto-1min")`。
+>
 > 配套脚本已放在：
 >
 > - `kairos-collect` —— akshare 多源 A 股 K 线采集

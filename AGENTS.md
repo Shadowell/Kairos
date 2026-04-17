@@ -19,12 +19,12 @@
 
 Kairos 是 [Kronos](https://github.com/shiyu-coder/Kronos) 基础模型在 **A 股场景** 下的微调 + 部署工具箱：
 
-- **数据采集** — `kairos.data.collect`（akshare 多源 fallback）
-- **因子工程** — `kairos.data.features`，32 维 `EXOG_COLS`，**无未来信息泄漏**
-- **数据集打包** — `kairos.data.prepare_dataset`（time-split / interleave-split）
-- **模型** — `kairos.models.KronosWithExogenous`（Kronos + 外生通道 + 分位回归头）
-- **训练** — `kairos.training.train_predictor`（DDP + 渐进解冻 + 早停）
-- **评估** — `kairos.training.backtest_ic`（IC / Rank-IC / ICIR）
+- **数据采集** — `kairos.data.collect`（dispatcher）+ `kairos.data.markets.*`（每个市场一个 adapter，A 股 / 加密 / 将来的外汇黄金）
+- **因子工程** — `kairos.data.common_features`（24 维通用）+ `adapter.market_features`（8 维市场专属）= `EXOG_COLS` 32 维，**无未来信息泄漏**
+- **数据集打包** — `kairos.data.prepare_dataset`（time-split / interleave-split；`--market` 切 adapter；落盘 `meta.json`）
+- **模型** — `kairos.models.KronosWithExogenous`（Kronos + 外生通道 + 分位回归头；`n_exog=32` 对所有市场一致）
+- **训练** — `kairos.training.train_predictor`（DDP + 渐进解冻 + 早停）+ `kairos.training.config.preset_for("crypto-1min")` 等预设
+- **评估** — `kairos.training.backtest_ic`（IC / Rank-IC / ICIR；支持 `--aggregation date/hour/minute/none`，从 `meta.json` 自动推 market/freq）
 - **部署** — `kairos.deploy.push_to_hf` / `kairos.deploy.serve`
 
 完整术语与背景见 `docs/GLOSSARY.md`。
@@ -213,7 +213,14 @@ EOF
 - **v2**（interleave-split + 降低 lr + 加大 quantile_weight + 早停）→ val_ce 改善，但 test IC 仍为负。
 - 结论：监督信号与 A 股未来收益相关性弱；下一步方向写在 `docs/TUNING_PLAYBOOK.md`。
 
-改超参时统一改 `kairos/training/config.py` 的 `TrainConfig`，不要把数字硬编码进 `train_predictor.py`。
+改超参时统一改 `kairos/training/config.py` 的 `TrainConfig`，不要把数字硬编码进 `train_predictor.py`。跨市场的参数组合走 `preset_for(name)`——新建市场/频率时**同步**在 `_PRESETS` 里加一条，而不是让调用方自己拼 dict。
+
+### 架构不变式（Phase 2）
+
+1. `len(COMMON_EXOG_COLS) + len(adapter.MARKET_EXOG_COLS) == 32`——加新 adapter 必须保持这一点，`build_features` 会直接 assert 抛错。
+2. 模型侧的 `n_exog` 固定 32，不要跟随 adapter 动；要加新因子就占 pad 或换掉某个 slot，不要扩维度。
+3. 新 adapter 必须能在**不加 `[crypto]` 这类可选依赖**的环境里 import 失败后被 `kairos/data/markets/__init__.py` 里的 `try/except ImportError` 吞掉，不能把 A 股主路径搞崩。
+4. `kairos-prepare` 产出的目录里必须有 `meta.json`，否则下游 `backtest_ic --dataset-path ...` 无法恢复 market/freq。
 
 ---
 

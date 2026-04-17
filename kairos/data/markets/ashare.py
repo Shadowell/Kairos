@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 
-from .base import STD_COLS, FetchTask, MarketAdapter, register_adapter
+from ..common_features import rolling_z
+from .base import STD_COLS, FeatureContext, FetchTask, MarketAdapter, register_adapter
 
 
 log = logging.getLogger("kairos.market.ashare")
@@ -264,11 +266,44 @@ _FETCHERS = {
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
+_CN_HOLIDAYS_APPROX = [
+    # Rough but serviceable; swap in chinese_calendar if you need precision.
+    (1, 1), (5, 1), (10, 1), (10, 2), (10, 3),
+]
+
+
+def _days_to_holiday(dt: pd.Series) -> pd.Series:
+    """Days until the next fixed PRC holiday (元旦 / 劳动节 / 国庆)."""
+    out = []
+    for d in dt:
+        diffs = []
+        for m, day in _CN_HOLIDAYS_APPROX:
+            try:
+                target = d.replace(month=m, day=day)
+            except ValueError:
+                continue
+            if target < d:
+                target = target.replace(year=d.year + 1)
+            diffs.append((target - d).days)
+        out.append(min(diffs) if diffs else 30)
+    return pd.Series(out, index=dt.index)
+
+
 class AshareAdapter(MarketAdapter):
     """A-share adapter built on top of ``akshare``."""
 
     name = "ashare"
     supported_freqs = tuple(_FETCHERS.keys())
+    MARKET_EXOG_COLS = (
+        "turnover",
+        "turnover_z",
+        "is_quarter_end",
+        "days_to_holiday",
+        "excess_ret_index",
+        "index_ret",
+        "pad_ashare_0",
+        "pad_ashare_1",
+    )
 
     def list_symbols(self, universe: str) -> List[str]:
         if ak is None:
@@ -308,6 +343,77 @@ class AshareAdapter(MarketAdapter):
             )
         return _FETCHERS[task.freq](task)
 
+    # ------------------------------------------------------------------
+    # Market-specific features
+    # ------------------------------------------------------------------
+    def market_features(
+        self,
+        df: pd.DataFrame,
+        *,
+        context: FeatureContext | None = None,
+    ) -> pd.DataFrame:
+        """A-share exogenous features: turnover + calendar + index-relative.
+
+        Any column missing from ``df`` (e.g. ``turnover`` when the upstream
+        data source didn't provide it) falls back to NaN so the shared
+        clean-up step in :func:`kairos.data.features.build_features` can
+        decide how to pad.
+        """
+
+        out = pd.DataFrame(index=df.index)
+
+        # --- turnover (% → decimal) ---
+        if "turnover" in df.columns:
+            turnover = df["turnover"].astype(float) / 100.0
+        else:
+            turnover = pd.Series(np.nan, index=df.index)
+        out["turnover"] = turnover
+        out["turnover_z"] = rolling_z(turnover.fillna(0), 60)
+
+        # --- calendar (PRC) ---
+        dt = (
+            pd.to_datetime(df["datetime"])
+            if "datetime" in df.columns
+            else pd.to_datetime(df.index)
+        )
+        out["is_quarter_end"] = (
+            dt.dt.month.isin([3, 6, 9, 12]) & (dt.dt.day >= 25)
+        ).astype(float).values
+        out["days_to_holiday"] = _days_to_holiday(dt).astype(float).values
+
+        # --- index-relative returns ---
+        index_df = context.index_df if context is not None else None
+        if index_df is not None and not index_df.empty:
+            idx = index_df[["datetime", "close"]].copy()
+            idx["datetime"] = pd.to_datetime(idx["datetime"])
+            idx = idx.rename(columns={"close": "_idx_close"})
+            merged = df[["datetime"]].copy() if "datetime" in df.columns else (
+                pd.DataFrame({"datetime": pd.to_datetime(df.index)})
+            )
+            merged = merged.merge(idx, on="datetime", how="left")
+            index_close = merged["_idx_close"].values
+            index_ret = np.log(
+                index_close / np.roll(index_close, 1, axis=0)
+            )
+            index_ret[0] = 0.0
+            out["index_ret"] = index_ret
+            close = df["close"].astype(float).values
+            own_ret = np.log(close / np.roll(close, 1, axis=0))
+            own_ret[0] = 0.0
+            out["excess_ret_index"] = own_ret - index_ret
+        else:
+            out["index_ret"] = 0.0
+            out["excess_ret_index"] = 0.0
+
+        # --- adapter-local pads (kept at 0 for now) ---
+        out["pad_ashare_0"] = 0.0
+        out["pad_ashare_1"] = 0.0
+
+        return out
+
+    # ------------------------------------------------------------------
+    # Calendar
+    # ------------------------------------------------------------------
     def trading_calendar(
         self, start: datetime, end: datetime, freq: str
     ) -> pd.DatetimeIndex:

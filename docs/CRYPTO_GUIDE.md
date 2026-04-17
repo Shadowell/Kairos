@@ -185,13 +185,108 @@ See `crypto_exchanges/okx.py` for the reference implementation.
 
 ---
 
-## 7. Roadmap
+## 7. Feature schema (Phase 2)
 
-- **Phase 2 factors (in progress):** funding rate, 8h funding average,
-  open interest delta, basis (perp vs spot), BTC dominance, per-symbol
-  beta-to-BTC.
-- **Phase 2 training:** Kronos + crypto exog → predict T+30min / T+4h
-  quantile returns, compared against a funding-rate-only baseline.
+The exogenous vector is always 32-wide. It is built as
+`COMMON_EXOG_COLS (24) + MarketAdapter.MARKET_EXOG_COLS (8)`:
+
+| Slot | Source | Column | Description |
+|---|---|---|---|
+| 0-23 | `kairos.data.common_features.COMMON_EXOG_COLS` | `log_ret_*`, `rsi_14`, `macd_hist`, `atr_14`, `parkinson_20`, `ma{5,20,60}_dev`, `boll_z`, `obv_z`, `mfi_14`, `amount_z`, `vwap_dev`, `amplitude`, `upper/lower_shadow`, `body_ratio`, `pad_common_{0,1}` | Market-agnostic technicals, reused across every adapter. |
+| 24 | Crypto | `funding_rate` | Filled from `OkxExchange.fetch_funding_rate_history` when provided via `FeatureContext.extras["funding_rate"]`. |
+| 25 | Crypto | `funding_rate_z` | 60-bar rolling z-score of `funding_rate`. |
+| 26 | Crypto | `oi_change` | Log-delta of open interest (`extras["open_interest"]`). |
+| 27 | Crypto | `basis` | `perp_close / spot_close - 1`, expects `extras["spot_close"]`. |
+| 28 | Crypto | `btc_dominance` | BTC market cap share (`extras["btc_dominance"]`), 0..1. |
+| 29 | Crypto | `hour_sin` | `sin(2π · hour_of_day / 24)` — always populated. |
+| 30 | Crypto | `hour_cos` | `cos(2π · hour_of_day / 24)` — always populated. |
+| 31 | Crypto | `pad_crypto_0` | Reserved for future cross-sectional factor. |
+
+**Initial crypto run** uses only slots 0-23, 29, 30 (price-action +
+intraday cycle). Plug in the three external series via
+`FeatureContext.extras` once you have collected them:
+
+```python
+from kairos.data.markets.crypto_exchanges.okx import OkxExchange, to_unix_ms
+
+ex = OkxExchange()
+start_ms = to_unix_ms("2024-01-01")
+end_ms = to_unix_ms("2024-04-01")
+
+funding = ex.fetch_funding_rate_history("BTC/USDT:USDT", start_ms, end_ms)
+oi = ex.fetch_open_interest_history("BTC/USDT:USDT", "1h", start_ms, end_ms)
+spot = ex.fetch_spot_ohlcv("BTC/USDT", "1min", start_ms, end_ms)["close"]
+
+# Pipe them into build_features for enrichment (usually done inside
+# prepare_dataset; this is the raw wiring if you want a notebook flow):
+df_feat = build_features(
+    df_perp_ohlcv,
+    market="crypto",
+    extras={
+        "funding_rate": funding["funding_rate"],
+        "open_interest": oi["open_interest"],
+        "spot_close": spot,
+    },
+)
+```
+
+The three `fetch_*_history` methods are already implemented and ready to
+call the moment your runner has network access to OKX.
+
+---
+
+## 8. Training a crypto model
+
+Once you have a prepared dataset under `./finetune/data/crypto_1min`:
+
+```bash
+# preset from kairos.training.config.preset_for
+python - <<'PY'
+from kairos.training.config import TrainConfig, preset_for
+cfg = TrainConfig(
+    **preset_for("crypto-1min"),
+    dataset_path="./finetune/data/crypto_1min",
+    save_path="./artifacts/checkpoints_crypto",
+)
+print(cfg)
+PY
+```
+
+`preset_for("crypto-1min")` flips the knobs that differ from the A-share
+daily baseline:
+
+| Knob | Default (A-share) | Crypto-1min |
+|---|---|---|
+| `market` | `ashare` | `crypto` |
+| `freq` | `daily` | `1min` |
+| `lookback_window` | 90 | 256 |
+| `predict_window` | 10 | 32 |
+| `return_horizon` | 5 | 30 |
+| `ce_weight` | 0.5 | 0.7 |
+| `quantile_weight` | 2.0 | 1.5 |
+
+Backtest on the same bundle (market / freq auto-read from `meta.json`):
+
+```bash
+python -m kairos.training.backtest_ic \
+  --ckpt artifacts/checkpoints_crypto/predictor/checkpoints/best_model \
+  --dataset-path ./finetune/data/crypto_1min \
+  --horizons 1,5,30 \
+  --aggregation date \
+  --out artifacts/backtest_crypto.json
+```
+
+`--aggregation` controls the cross-section: with only a handful of
+symbols, bucket by `date` (one cross-section per day); with a broader
+universe you can bump to `hour` or `minute`.
+
+---
+
+## 9. Roadmap
+
+- **Phase 2 (now):** implement funding / OI / basis ingestion end-to-end,
+  plumb into `prepare_dataset` via `FeatureContext`, run first
+  `crypto-1min` fine-tune, compare IC vs a funding-rate-only baseline.
 - **Phase 3 (if IC > 0):** 15-second bars on a curated universe, funding
   arbitrage, optional on-chain features.
 

@@ -28,9 +28,11 @@ import os
 from datetime import datetime
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 
-from .base import FetchTask, MarketAdapter, register_adapter
+from ..common_features import rolling_z
+from .base import FeatureContext, FetchTask, MarketAdapter, register_adapter
 from .crypto_exchanges import (
     CryptoExchange,
     ExchangeConfig,
@@ -44,6 +46,39 @@ log = logging.getLogger("kairos.market.crypto")
 
 DEFAULT_EXCHANGE = "okx"
 """Default venue when ``KAIROS_CRYPTO_EXCHANGE`` is not set."""
+
+
+def _align_series(source, dt: pd.Series) -> pd.Series:
+    """Align an optional external series to the feature window timestamps.
+
+    Returns a Series with NaN for every bar when ``source`` is missing or
+    not alignable. The caller decides the fill policy (zero, forward-fill,
+    clip) so this helper stays pure.
+    """
+
+    if source is None:
+        return pd.Series(np.nan, index=range(len(dt)))
+    if isinstance(source, pd.Series):
+        s = source
+    elif isinstance(source, pd.DataFrame):
+        if source.shape[1] == 0:
+            return pd.Series(np.nan, index=range(len(dt)))
+        s = source.iloc[:, 0]
+    else:
+        arr = np.asarray(source).reshape(-1)
+        if len(arr) != len(dt):
+            return pd.Series(np.nan, index=range(len(dt)))
+        return pd.Series(arr, index=range(len(dt)))
+
+    if not isinstance(s.index, pd.DatetimeIndex):
+        try:
+            s = s.copy()
+            s.index = pd.to_datetime(s.index)
+        except Exception:  # noqa: BLE001
+            return pd.Series(np.nan, index=range(len(dt)))
+    reindexed = s.reindex(dt.values, method="ffill")
+    reindexed.index = range(len(dt))
+    return reindexed
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +104,22 @@ class CryptoAdapter(MarketAdapter):
 
     name = "crypto"
     supported_freqs = tuple(_FREQ_TO_PANDAS.keys())
+
+    #: 8 market-specific columns. The first 5 get populated once
+    #: funding/OI/basis/dominance series are supplied via ``FeatureContext``;
+    #: until then they stay at 0 so the exog vector keeps a stable shape.
+    #: ``hour_sin`` / ``hour_cos`` encode the 24h intraday cycle (crypto has
+    #: no session breaks, so this is the intraday-seasonality hook).
+    MARKET_EXOG_COLS = (
+        "funding_rate",
+        "funding_rate_z",
+        "oi_change",
+        "basis",
+        "btc_dominance",
+        "hour_sin",
+        "hour_cos",
+        "pad_crypto_0",
+    )
 
     def __init__(
         self,
@@ -172,6 +223,87 @@ class CryptoAdapter(MarketAdapter):
             start_ms=start_ms,
             end_ms=end_ms,
         )
+
+    # ------------------------------------------------------------------
+    # Market-specific features
+    # ------------------------------------------------------------------
+    def market_features(
+        self,
+        df: pd.DataFrame,
+        *,
+        context: FeatureContext | None = None,
+    ) -> pd.DataFrame:
+        """Crypto exogenous features.
+
+        Five data-driven factors (``funding_rate``, ``funding_rate_z``,
+        ``oi_change``, ``basis``, ``btc_dominance``) expect to receive
+        pre-aligned series via ``context.extras`` keyed as follows:
+
+        * ``"funding_rate"`` — DataFrame/Series indexed by datetime, rate
+          per 8h settlement, usually sourced from
+          :meth:`OkxExchange.fetch_funding_rate_history`.
+        * ``"open_interest"`` — Series of OI snapshots; we compute
+          log-change internally.
+        * ``"spot_close"`` — spot close price aligned to the perp bars;
+          we compute basis as ``(perp / spot - 1)``.
+        * ``"btc_dominance"`` — pre-computed BTC market-cap dominance
+          (0-1) at each bar.
+
+        When a series is missing, the column is filled with 0.0 so the
+        resulting exog vector has the expected width.
+
+        The last three columns (``hour_sin``, ``hour_cos``, ``pad_crypto_0``)
+        are computed locally from the timestamp and never rely on external
+        series, so they always carry real signal.
+        """
+
+        out = pd.DataFrame(index=df.index)
+        n = len(df)
+        dt = (
+            pd.to_datetime(df["datetime"])
+            if "datetime" in df.columns
+            else pd.to_datetime(df.index)
+        )
+        extras = context.extras if context is not None else {}
+
+        # --- funding rate ---
+        funding = _align_series(extras.get("funding_rate"), dt)
+        out["funding_rate"] = funding.fillna(0.0).values
+        out["funding_rate_z"] = rolling_z(funding.fillna(0.0), 60).fillna(0.0).values
+
+        # --- open-interest change (log-delta) ---
+        oi = _align_series(extras.get("open_interest"), dt)
+        oi_change = np.log(oi / oi.shift(1))
+        out["oi_change"] = oi_change.replace(
+            [np.inf, -np.inf], np.nan
+        ).fillna(0.0).values
+
+        # --- basis = perp_close / spot_close - 1 ---
+        spot = _align_series(extras.get("spot_close"), dt)
+        perp_close = df["close"].astype(float).values
+        with np.errstate(divide="ignore", invalid="ignore"):
+            basis = perp_close / spot.values - 1.0
+        basis = np.where(np.isfinite(basis), basis, 0.0)
+        out["basis"] = basis
+
+        # --- btc dominance (0..1) ---
+        dominance = _align_series(extras.get("btc_dominance"), dt)
+        out["btc_dominance"] = dominance.fillna(0.0).values
+
+        # --- 24h intraday cycle (always computable) ---
+        hour_of_day = dt.dt.hour.astype(float) + dt.dt.minute.astype(float) / 60.0
+        radians = 2.0 * np.pi * (hour_of_day.values / 24.0)
+        out["hour_sin"] = np.sin(radians)
+        out["hour_cos"] = np.cos(radians)
+
+        # --- local pad ---
+        out["pad_crypto_0"] = 0.0
+
+        if len(out) != n:
+            raise RuntimeError(
+                f"market_features length mismatch: expected {n}, got {len(out)}"
+            )
+        return out
 
     # ------------------------------------------------------------------
     # Calendar
