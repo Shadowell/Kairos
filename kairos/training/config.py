@@ -13,7 +13,7 @@ from typing import List
 @dataclass
 class TrainConfig:
     # ---------------- Data & Features ----------------
-    dataset_path: str = "./artifacts/datasets"
+    dataset_path: str = "./finetune/data/processed_datasets"
     lookback_window: int = 90
     predict_window: int = 10
     max_context: int = 512
@@ -28,18 +28,20 @@ class TrainConfig:
     # ---------------- Training ----------------
     seed: int = 100
     clip: float = 5.0
-    epochs: int = 30
+    epochs: int = 15
     log_interval: int = 100
     batch_size: int = 50
-    n_train_iter: int = 2000 * 50
-    n_val_iter: int = 400 * 50
+    n_train_iter: int = 50000   # 1000 step * batch 50
+    n_val_iter: int = 10000     # 200 step * batch 50
     tokenizer_learning_rate: float = 2e-4
-    predictor_learning_rate: float = 4e-5
+    predictor_learning_rate: float = 5e-6
+    warmup_pct: float = 0.1     # OneCycleLR 的 pct_start
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
-    adam_weight_decay: float = 0.1
+    adam_weight_decay: float = 0.05
     accumulation_steps: int = 1
     num_workers: int = 2
+    patience: int = 3           # 连续 N 个 epoch val 不降就停
 
     # ---------------- Logging / Checkpoints ----------------
     save_path: str = "./artifacts/checkpoints"
@@ -59,6 +61,6 @@ class TrainConfig:
     use_return_head: bool = True
     return_horizon: int = 5
     n_quantiles: int = 9
-    ce_weight: float = 1.0
-    quantile_weight: float = 0.5
-    unfreeze_last_n: int = 2
+    ce_weight: float = 0.5
+    quantile_weight: float = 2.0
+    unfreeze_last_n: int = 1

@@ -63,7 +63,7 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
     sch = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=cfg.predictor_learning_rate,
         steps_per_epoch=len(t_loader), epochs=cfg.epochs,
-        pct_start=0.03, div_factor=10,
+        pct_start=getattr(cfg, "warmup_pct", 0.03), div_factor=10,
     )
 
     quantiles = None
@@ -73,6 +73,8 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
     best = float("inf")
     step_g = 0
     close_idx = 3  # feature_list order: open, high, low, close, vol, amt
+    patience = getattr(cfg, "patience", 0)
+    bad_epochs = 0
 
     for ep in range(cfg.epochs):
         ep_t0 = time.time()
@@ -148,25 +150,52 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
         dist.all_reduce(ls); dist.all_reduce(cn)
         val = (ls / cn).item() if cn.item() else 0.0
 
+        improved = val < best - 1e-4
         if rank == 0:
             print(f"--- ep {ep+1}: val_ce={val:.4f} "
                   f"({format_time(time.time() - ep_t0)} / total {format_time(time.time() - t0)}) ---")
-            if val < best:
+            if improved:
                 best = val
                 save = save_dir / "checkpoints" / "best_model"
                 model.module.save_pretrained(str(save))
-                print(f"[save] best → {save}")
+                print(f"[save] best → {save} (val_ce={val:.4f})")
+        # 广播 improved 标记给所有 rank，统一做早停决策
+        flag = torch.tensor([1 if improved else 0], device=device)
+        dist.all_reduce(flag)
+        improved_any = flag.item() > 0
+        if improved_any:
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+            if rank == 0:
+                print(f"[patience] {bad_epochs}/{patience} epochs without improvement")
+
         dist.barrier()
 
-    return {"best_val_loss": best}
+        if patience > 0 and bad_epochs >= patience:
+            if rank == 0:
+                print(f"[early-stop] val did not improve for {patience} epochs; stopping at ep {ep+1}")
+            break
+
+    return {"best_val_loss": best, "stopped_epoch": ep + 1}
 
 
 def main():
     cfg = TrainConfig()
+    # Smoke-test overrides for CPU / laptop runs. Activate with KAIROS_SMOKE=1.
+    if os.environ.get("KAIROS_SMOKE") == "1":
+        cfg.epochs = 1
+        cfg.batch_size = 4
+        cfg.num_workers = 0
+        cfg.log_interval = 5
+        cfg.unfreeze_last_n = 1
+        cfg.n_train_iter = 40     # ≈ 10 batches of size 4
+        cfg.n_val_iter = 20
     if "WORLD_SIZE" not in os.environ:
         raise RuntimeError("请用 torchrun 启动此脚本")
     rank, world, local = setup_ddp()
-    device = torch.device(f"cuda:{local}")
+    use_cuda = torch.cuda.is_available()
+    device = torch.device(f"cuda:{local}") if use_cuda else torch.device("cpu")
     set_seed(cfg.seed, rank)
 
     save_dir = Path(cfg.save_path) / cfg.predictor_save_folder_name
@@ -189,7 +218,10 @@ def main():
         n_quantiles=cfg.n_quantiles,
     ).to(device)
     model.freeze_backbone(unfreeze_last_n=cfg.unfreeze_last_n)
-    model = DDP(model, device_ids=[local], find_unused_parameters=True)
+    ddp_kwargs = dict(find_unused_parameters=True)
+    if use_cuda:
+        ddp_kwargs["device_ids"] = [local]
+    model = DDP(model, **ddp_kwargs)
 
     if rank == 0:
         print("Predictor size:", get_model_size(model.module))

@@ -10,9 +10,9 @@ def setup_ddp():
     """
     Initializes the distributed data parallel environment.
 
-    This function relies on environment variables set by `torchrun` or a similar
-    launcher. It initializes the process group and sets the CUDA device for the
-    current process.
+    Honors environment variables set by `torchrun`. Picks `nccl` on CUDA and
+    `gloo` otherwise so CPU-only machines (e.g. Apple laptops for smoke runs)
+    still work.
 
     Returns:
         tuple: A tuple containing (rank, world_size, local_rank).
@@ -20,15 +20,18 @@ def setup_ddp():
     if not dist.is_available():
         raise RuntimeError("torch.distributed is not available.")
 
-    dist.init_process_group(backend="nccl")
+    use_cuda = torch.cuda.is_available()
+    backend = "nccl" if use_cuda else "gloo"
+    dist.init_process_group(backend=backend)
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    print(
-        f"[DDP Setup] Global Rank: {rank}/{world_size}, "
-        f"Local Rank (GPU): {local_rank} on device {torch.cuda.current_device()}"
-    )
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if use_cuda:
+        torch.cuda.set_device(local_rank)
+        dev_info = f"Local Rank (GPU): {local_rank} on device {torch.cuda.current_device()}"
+    else:
+        dev_info = "CPU mode (no CUDA detected)"
+    print(f"[DDP Setup] Global Rank: {rank}/{world_size}, {dev_info}")
     return rank, world_size, local_rank
 
 

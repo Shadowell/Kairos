@@ -70,12 +70,21 @@ def get_universe(name: str) -> List[str]:
     if name in UNIVERSE_FUNCS:
         fn_name, kwargs = UNIVERSE_FUNCS[name]
         df = getattr(ak, fn_name)(**kwargs)
-        # csindex 列名是 '成分券代码' / '成份券代码'
-        col = next((c for c in df.columns if "代码" in c), None)
+        # csindex 返回的列同时包含 '指数代码' 和 '成分券代码'，必须挑后者
+        preferred = ["成分券代码", "成份券代码", "证券代码", "股票代码"]
+        col = next((c for c in preferred if c in df.columns), None)
+        if col is None:
+            # 回退：挑带 '代码' 但不是 '指数代码' 的列
+            col = next(
+                (c for c in df.columns if "代码" in c and "指数" not in c),
+                None,
+            )
         if col is None:
             raise RuntimeError(f"无法识别成分股列名: {df.columns.tolist()}")
         codes = df[col].astype(str).str.zfill(6).tolist()
-        return sorted(codes)
+        # 去重，防止同一只股票因多交易所上市出现多次
+        codes = sorted(set(codes))
+        return codes
 
     # 支持直接传入逗号分隔的股票列表: "600977,000001,300750"
     if "," in name or name.isdigit():
@@ -153,16 +162,92 @@ class FetchTask:
         return self.out_dir / f"{self.symbol}.parquet"
 
 
+# 进程级状态：东财连续失败阈值后自动禁用本次运行的 eastmoney 源
+_EASTMONEY_DISABLED = False
+_EASTMONEY_CONSEC_FAILS = 0
+_EASTMONEY_MAX_FAILS = 3
+
+
+def _sina_symbol(code: str) -> str:
+    """六位代码 -> 新浪前缀代码 (sh600000 / sz000001 / bj831010)。"""
+    if code.startswith(("60", "68", "90", "11", "13")):
+        return "sh" + code
+    if code.startswith(("4", "8")):
+        return "bj" + code
+    return "sz" + code
+
+
 def _fetch_daily(t: FetchTask) -> pd.DataFrame:
-    start = t.start.replace("-", "")
-    end = t.end.replace("-", "")
-    df = ak.stock_zh_a_hist(
-        symbol=t.symbol, period="daily",
-        start_date=start, end_date=end, adjust=t.adjust,
-    )
-    if df is None or df.empty:
-        return pd.DataFrame(columns=STD_COLS)
-    return _standardize(df)
+    """日线抓取：优先东财，失败降级到腾讯 / 新浪。"""
+    start_compact = t.start.replace("-", "")
+    end_compact = t.end.replace("-", "")
+    sina_sym = _sina_symbol(t.symbol)
+
+    def from_eastmoney() -> pd.DataFrame:
+        return ak.stock_zh_a_hist(
+            symbol=t.symbol, period="daily",
+            start_date=start_compact, end_date=end_compact, adjust=t.adjust,
+        )
+
+    def from_tencent() -> pd.DataFrame:
+        df = ak.stock_zh_a_hist_tx(
+            symbol=sina_sym,
+            start_date=start_compact, end_date=end_compact, adjust=t.adjust,
+        )
+        if df is None or df.empty:
+            return df
+        # 腾讯返回: date/open/close/high/low/amount (这里 amount 实为成交量/手)
+        return df.rename(columns={
+            "date": "日期", "open": "开盘", "close": "收盘",
+            "high": "最高", "low": "最低", "amount": "成交量",
+        })
+
+    def from_sina() -> pd.DataFrame:
+        df = ak.stock_zh_a_daily(
+            symbol=sina_sym, adjust=t.adjust or "",
+            start_date=t.start, end_date=t.end,
+        )
+        if df is None or df.empty:
+            return df
+        # 新浪返回: date/open/high/low/close/volume/amount/outstanding_share/turnover
+        out = df.rename(columns={
+            "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
+            "close": "收盘", "volume": "成交量", "amount": "成交额",
+        })
+        if "turnover" in out.columns:
+            out["换手率"] = out["turnover"] * 100.0
+        return out
+
+    global _EASTMONEY_DISABLED, _EASTMONEY_CONSEC_FAILS
+    sources: List[tuple] = []
+    if not _EASTMONEY_DISABLED:
+        sources.append(("eastmoney", from_eastmoney))
+    sources += [("tencent", from_tencent), ("sina", from_sina)]
+
+    last_err: Optional[Exception] = None
+    for name, fn in sources:
+        try:
+            df = fn()
+            if df is None or df.empty:
+                continue
+            if name == "eastmoney":
+                _EASTMONEY_CONSEC_FAILS = 0
+            return _standardize(df)
+        except Exception as e:
+            last_err = e
+            log.debug(f"[{t.symbol}] {name} 源失败: {e}")
+            if name == "eastmoney":
+                _EASTMONEY_CONSEC_FAILS += 1
+                if _EASTMONEY_CONSEC_FAILS >= _EASTMONEY_MAX_FAILS:
+                    _EASTMONEY_DISABLED = True
+                    log.warning(
+                        f"东财连续失败 {_EASTMONEY_CONSEC_FAILS} 次，本次运行禁用该源，降级到腾讯/新浪"
+                    )
+            continue
+
+    if last_err is not None:
+        raise last_err
+    return pd.DataFrame(columns=STD_COLS)
 
 
 def _fetch_min(t: FetchTask) -> pd.DataFrame:
