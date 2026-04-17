@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kairos-kronos"
+version = "0.1.0"
+description = "A-share fine-tuning & deployment toolkit for the Kronos foundation model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Kairos Contributors" }]
+keywords = ["kronos", "time-series", "finance", "a-share", "akshare", "transformer"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "torch>=2.0",
+    "einops>=0.8",
+    "tqdm>=4.65",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.24",
+    "akshare>=1.14",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+serve = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.5"]
+train = ["comet-ml>=3.39"]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+kairos-collect = "kairos.data.collect:main"
+kairos-prepare = "kairos.data.prepare_dataset:main"
+kairos-train-tokenizer = "kairos.training.train_tokenizer:main"
+kairos-train-predictor = "kairos.training.train_predictor:main"
+kairos-push-hf = "kairos.deploy.push_to_hf:main"
+kairos-serve = "kairos.deploy.serve:main"
+
+[project.urls]
+Homepage = "https://github.com/your-user/kairos"
+Documentation = "https://github.com/your-user/kairos/tree/main/docs"
+Issues = "https://github.com/your-user/kairos/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kairos*"]
+exclude = ["tests*", "examples*"]

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Data & artifacts
+raw/
+artifacts/
+outputs/
+*.parquet
+*.pkl
+*.safetensors
+logs/
+wandb/
+comet_ml/
+
+# Hugging Face cache (if accidentally set to project dir)
+hf_cache/

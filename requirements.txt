@@ -1,0 +1,21 @@
+# Core dependencies — install with: pip install -r requirements.txt
+# For editable install + CLI entry points: pip install -e '.[serve,train]'
+
+numpy
+pandas>=2.0
+pyarrow>=14
+torch>=2.0
+einops>=0.8
+tqdm>=4.65
+safetensors>=0.4
+huggingface_hub>=0.24
+akshare>=1.14
+matplotlib>=3.7
+
+# --- optional: serve ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.5
+
+# --- optional: experiment tracking ---
+# comet-ml>=3.39
