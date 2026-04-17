@@ -26,7 +26,7 @@ def _safe_import(name: str) -> None:
         pass
 
 
-for _venue in ("okx",):
+for _venue in ("okx", "binance_vision"):
     _safe_import(_venue)
 
 

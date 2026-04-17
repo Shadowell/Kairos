@@ -177,8 +177,22 @@ class CryptoAdapter(MarketAdapter):
         )
 
     def _top_by_volume(self, top_n: int) -> List[str]:
-        """Return the top-N USDT-quoted perpetuals ranked by 24h quote volume."""
-        markets = self.exchange.list_markets()
+        """Return the top-N USDT-quoted symbols ranked by 24h quote volume.
+
+        The ranking logic is venue-specific (ccxt ``fetch_tickers`` for
+        some, raw REST for others), so we prefer an exchange-side hook
+        when one is available and fall back to the ccxt path otherwise.
+        This keeps :class:`CryptoAdapter` decoupled from ccxt — venues
+        like :class:`BinanceVisionExchange`, which serve a public data
+        mirror without ccxt, plug in cleanly.
+        """
+
+        ex = self.exchange
+        hook = getattr(ex, "list_symbols_by_volume", None)
+        if callable(hook):
+            return hook(top_n)
+
+        markets = ex.list_markets()
         # Keep linear USDT-margined perpetuals only; this is the contract type
         # that matches DEFAULT_MARKET_TYPE="swap" and the EXOG factors Kairos
         # will add in Phase 2 (funding rate, open interest).
@@ -191,9 +205,17 @@ class CryptoAdapter(MarketAdapter):
             and m.get("quote") == "USDT"
         ]
 
-        tickers = self.exchange._ccxt.fetch_tickers(  # ccxt: intentional
-            [m["symbol"] for m in candidates]
-        )
+        ccxt_client = getattr(ex, "_ccxt", None)
+        if ccxt_client is None:
+            # No ccxt and no volume hook: best-effort, preserve exchange order.
+            log.warning(
+                f"exchange {ex.name!r} has no list_symbols_by_volume hook "
+                "and no ccxt client; returning markets in their reported "
+                "order, which is NOT a liquidity ranking."
+            )
+            return [m["symbol"] for m in candidates[:top_n]]
+
+        tickers = ccxt_client.fetch_tickers([m["symbol"] for m in candidates])
 
         def key(sym: str) -> float:
             t = tickers.get(sym) or {}

@@ -80,11 +80,17 @@ kairos-collect --universe csi300 --freq daily \
 
 # 1b) 采集 — 加密货币（需要先装 crypto extras）
 pip install -e '.[crypto]'
+# 默认 OKX 永续（需要代理或直连 OKX；有 funding/OI/basis）
 kairos-collect --market crypto \
   --universe "BTC/USDT:USDT,ETH/USDT:USDT" --freq 1min \
   --start 2023-01-01 --end 2025-01-01 \
   --out ./raw/crypto/1min --workers 1 \
-  --proxy "${HTTPS_PROXY:-}"         # 中国内陆通常要配代理，见 docs/CRYPTO_GUIDE.md
+  --proxy "${HTTPS_PROXY:-}"
+# 办公网下的降级通道（Binance 公共镜像，只有现货，没有 funding/OI/basis）
+kairos-collect --market crypto --exchange binance_vision \
+  --universe "BTC/USDT,ETH/USDT" --freq 1min \
+  --start 2024-01-01 --end 2024-02-01 \
+  --out ./raw/crypto/bv_1min --workers 1
 
 # 2) 打包（v2 默认 interleave split）
 kairos-prepare --raw-dir ./raw/daily \
@@ -202,6 +208,8 @@ EOF
 | AutoDL 卡在 `loading Kronos-Tokenizer-base` | `http_proxy` 和 `HF_ENDPOINT=hf-mirror.com` 冲突 | `unset http_proxy https_proxy`；提前 `huggingface-cli download` 预缓存 |
 | `numpy` 2.x 导致 torch 崩 | 版本冲突 | `pip install "numpy<2"` |
 | DDP 在 CPU 上跑不起来 | 默认 nccl | `training_utils.setup_ddp` 已自动切 gloo |
+| 办公网封了 OKX / Binance 主站 | GFW + 公司白名单 | 用 `--exchange binance_vision` 走 `data-api.binance.vision` 现货镜像，只能拉现货 K 线（没有 funding/OI/basis） |
+| 用 `binance_vision` 拉出来的 parquet 时间范围偏移 | `_to_unix_ms` 用 naive local time 转 UTC | 预期行为，对 24/7 crypto 不影响训练；真要精确 UTC 日界就手动传完整 ISO 时间 |
 
 更多见 `docs/AUTODL_GUIDE.md` 的 "常见坑" 一节。
 

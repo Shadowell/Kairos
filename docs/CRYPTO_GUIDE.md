@@ -156,6 +156,44 @@ Pagination is handled internally (OKX caps to 300 bars per request).
 
 ---
 
+## 4.5 Office-network fallback: `binance_vision`
+
+Many China-based corporate networks block `api.binance.com`,
+`fapi.binance.com`, **and** `okx.com`, but leave the Binance public data
+mirror `data-api.binance.vision` reachable. Kairos ships a thin backend
+that talks to that mirror so you can validate the entire
+collect → prepare → train pipeline without leaving the office.
+
+```bash
+kairos-collect --market crypto --exchange binance_vision \
+  --universe "BTC/USDT,ETH/USDT" --freq 1min \
+  --start 2024-01-01 --end 2024-02-01 \
+  --out ./raw/crypto/binance_spot_1min --workers 1
+```
+
+Key differences vs the OKX default:
+
+| Capability | `okx` (default) | `binance_vision` |
+|---|---|---|
+| Perpetual OHLCV | ✅ | ❌ (spot mirror only) |
+| Funding rate history | ✅ | ❌ (`NotImplementedError`) |
+| Open-interest history | ✅ | ❌ |
+| Basis (perp vs spot) | ✅ | ❌ |
+| Symbol format | `BTC/USDT:USDT` | `BTC/USDT` (perp form auto-degraded with warning) |
+| Credentials | optional | never accepted |
+| Blocked in Chinese office networks | often yes | usually **no** |
+
+Use it for:
+- Smoke-testing code changes end-to-end without waiting for a VPN.
+- Running a "price-action only" baseline so you can attribute IC
+  improvements later to the funding/OI/basis features when you add them.
+
+Do **not** use it for the canonical Phase 2 run — crypto's edge over
+A-shares comes largely from perp-derived features, which this backend
+cannot serve.
+
+---
+
 ## 5. Extending to other exchanges
 
 Adding Binance / Bybit is roughly three steps:
