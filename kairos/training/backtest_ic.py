@@ -98,6 +98,8 @@ def run_backtest(
     device: str | None = None,
     use_baseline: bool = False,
     aggregation: str = "auto",
+    stride: int = 1,
+    per_symbol_limit: int | None = None,
 ) -> Dict:
     device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"[device] {device_t}")
@@ -180,7 +182,10 @@ def run_backtest(
 
         buf_x.clear(); buf_stamp.clear(); buf_exog.clear(); buf_meta.clear()
 
+    flushes = 0
+
     for si, sym in enumerate(symbols):
+        print(f"[sym {si + 1}/{len(symbols)}] {sym} (records so far: {len(records)})")
         df = _build_window_features(test_data[sym], cfg.feature_list, cfg.time_feature_list)
         edf = test_exog.get(sym)
         if edf is None:
@@ -194,7 +199,17 @@ def run_backtest(
         H = max(horizons)
         window = lookback + 1  # 用 lookback+1 个 bar，最后一根用来预测未来 (模型 forward 是 T-1)
 
-        for start in range(0, total - window - H + 1):
+        step = max(1, int(stride))
+        starts = list(range(0, total - window - H + 1, step))
+        if per_symbol_limit and per_symbol_limit > 0:
+            # Take an evenly spaced slice so we still cover the whole test
+            # window; useful for CPU smoke checks without biasing to the
+            # start/end of the series.
+            if len(starts) > per_symbol_limit:
+                idx = np.linspace(0, len(starts) - 1, per_symbol_limit).astype(int)
+                starts = [starts[i] for i in idx]
+
+        for start in starts:
             end = start + window
             win = df.iloc[start:end]
 
@@ -236,6 +251,9 @@ def run_backtest(
 
             if len(buf_x) >= batch_size:
                 flush()
+                flushes += 1
+                if flushes % 50 == 0:
+                    print(f"  [batch] {flushes} flushes, {len(records)} records")
 
         if (si + 1) % 30 == 0:
             print(f"[progress] {si + 1}/{len(symbols)} symbols, "
@@ -322,6 +340,11 @@ def main():
                          "(e.g. 'crypto-1min'); overrides --market/freq")
     ap.add_argument("--aggregation", default="auto",
                     help="cross-sectional bucket: auto / date / hour / minute / none")
+    ap.add_argument("--stride", type=int, default=1,
+                    help="只对每 N 根 bar 取一个窗口用于评估（CPU smoke 友好；"
+                         "GPU 全量回测保持默认 1）")
+    ap.add_argument("--per-symbol-limit", type=int, default=0,
+                    help=">0 时每个 symbol 最多评估 N 个窗口（等距抽样覆盖全区间）")
     args = ap.parse_args()
 
     overrides: dict = {}
@@ -353,6 +376,8 @@ def main():
         max_symbols=args.max_symbols,
         use_baseline=args.baseline,
         aggregation=args.aggregation,
+        stride=args.stride,
+        per_symbol_limit=args.per_symbol_limit or None,
     )
 
     out_p = Path(args.out)

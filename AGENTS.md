@@ -212,6 +212,7 @@ EOF
 | 用 `binance_vision` 拉出来的 parquet 时间范围偏移 | `_to_unix_ms` 用 naive local time 转 UTC | 预期行为，对 24/7 crypto 不影响训练；真要精确 UTC 日界就手动传完整 ISO 时间 |
 | 本机 macOS `torchrun --standalone` 长时间卡在一堆 `IPv6 ... gai error: 8` 警告 | macOS 对本机 hostname 解析到 IPv6 失败，`torchrun` 的 rendezvous server 挂在主机名上等超时 | 单卡/本机 smoke 不用 torchrun，直接 `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`；AutoDL/GPU 机仍正常用 torchrun |
 | smoke 时 `OneCycleLR` 抛 `ZeroDivisionError: float division by zero` | `total_steps = epochs * steps_per_epoch` 过小时 `int(pct_start * total_steps)` 退化为 0，阶段边界重合 | `KAIROS_SMOKE=1` 已经把 `n_train_iter` 设到 200、`warmup_pct=0.2`，保证 `total_steps ≥ ~50`；自定义 smoke 时也要守这一下限 |
+| `backtest_ic --per-symbol-limit` 跑完 `by_date_mean.ic` 全是 `NaN` | 每个 symbol 独立等距抽样，抽到的时间戳两两不对齐 → 每个 bucket 只 1 条记录，横截面相关系数算不出来 | smoke 用 `--aggregation none` 看 overall 即可；要在少量 symbol 上验 bucket IC，要么 `--stride 60` 让所有 symbol 用同一套偏移，要么直接 GPU 全量 stride=1 跑 |
 
 更多见 `docs/AUTODL_GUIDE.md` 的 "常见坑" 一节。
 
