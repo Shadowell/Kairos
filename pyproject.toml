@@ -45,9 +45,9 @@ kairos-push-hf = "kairos.deploy.push_to_hf:main"
 kairos-serve = "kairos.deploy.serve:main"
 
 [project.urls]
-Homepage = "https://github.com/your-user/kairos"
-Documentation = "https://github.com/your-user/kairos/tree/main/docs"
-Issues = "https://github.com/your-user/kairos/issues"
+Homepage = "https://github.com/Shadowell/Kairos"
+Documentation = "https://github.com/Shadowell/Kairos/tree/main/docs"
+Issues = "https://github.com/Shadowell/Kairos/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

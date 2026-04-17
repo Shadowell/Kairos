@@ -59,8 +59,8 @@ kairos.deploy.push_to_hf      kairos.deploy.serve
 ### 安装
 
 ```bash
-git clone https://github.com/your-user/kairos.git
-cd kairos
+git clone https://github.com/Shadowell/Kairos.git
+cd Kairos
 pip install -e '.[serve,train]'
 ```
 
@@ -142,7 +142,7 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 ## 📂 项目结构
 
 ```
-kairos/
+Kairos/
 ├── README.md / LICENSE / pyproject.toml / requirements.txt
 ├── docs/
 │   └── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）

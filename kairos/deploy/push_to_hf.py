@@ -19,7 +19,7 @@ library_name: pytorch
 
 # {repo}
 
-A-share fine-tuned Kronos tokenizer, produced by **[Kairos](https://github.com/your-user/kairos)**.
+A-share fine-tuned Kronos tokenizer, produced by **[Kairos](https://github.com/Shadowell/Kairos)**.
 
 ## Usage
 
