@@ -45,6 +45,20 @@
 
 训了两版（time-split v1 + interleave-split v2），test IC 都为负，结论：在现成 EXOG schema 下 A 股日线信号偏弱。下一步方向（调权重冻结策略、改监督信号、换到分钟级）写在 [docs/TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md)。
 
+### 已发布模型
+
+| Hub repo | 数据 | base model | 说明 |
+|---|---|---|---|
+| [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | 上表 h30 那行的 checkpoint；tokenizer 复用上游 [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) |
+
+```python
+from kairos import KronosTokenizer
+from kairos.models import KronosWithExogenous
+
+tok   = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
+model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-small-crypto")
+```
+
 ---
 
 ## 🏗️ 架构
