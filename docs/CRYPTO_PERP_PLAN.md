@@ -181,7 +181,8 @@ df = build_features(df, index_df, market=market, symbol=path.stem, extras=extras
 | OKX API 某个 symbol funding/OI 404（非永续或已下架） | 该 kind 不写 parquet，打包侧 `_align_series → NaN → 0`，继续训练 |
 | mihomo 断连 / 节点被封 | `fetch_extras` 的 ccxt retry 会报错，`fetch_one` 记 `fail` 但不中断整批 |
 | spot symbol 不存在（某些 alt coin 只有 perp，没对应 spot） | 跳过 spot，basis=0 |
-| OKX funding 历史只有 3 个月（老数据）| 当前 run 只要最新 1 年，落在 OKX 有覆盖的区间里，没问题；若超出，新老时段都存进去，打包时 `_align_series` ffill 兜底 |
+| **OKX funding-rate-history 保留 ~90 天**（Phase-5 实测二分法：90d ok、120d 起空表）| 1 年 run 里最老的 ~9 个月 funding 全空；接受 `_align_series` 填 0，或者改写 adapter 从 `fetchFundingRate`（当前实时值）走 crontab 自建历史 |
+| **OKX contracts/open-interest-history 只返回最近 ~8 小时**（实测：默认 100 条 5m；`after`/`before`/`begin`/`end` 参数都不给翻老数据）| 正式训练必须放弃历史 OI；要么实时订阅并自建 parquet 累积，要么接受 `oi_change` 列长期为 0（与 BTC/ETH spot run 持平）。Phase 5 mini 因为窗口 > 8h 也会拿不到 → 是**预期**，不是 bug。mini 要真实 OI 就把窗口收到最近 5 小时 |
 
 ---
 
