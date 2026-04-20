@@ -24,22 +24,18 @@
 
 ## 📈 核心成果
 
-### 加密货币 1-min 微调（2026-04-17）
+### 加密货币 1-min 微调
 
-**数据**：BTC/USDT + ETH/USDT 1-min K 线，2024-01 ~ 2026-04（30 万条 test 样本）；**硬件**：单卡 RTX 5090；**耗时**：10 分 18 秒；**成本**：约 ¥3-5。
+**两次 run 的 h30 对比**（horizon 对齐 preset `return_horizon=30`，binance_vision 现货；硬件：单卡 RTX 5090）：
 
-| horizon | model | hit_rate | rank_ic | ICIR |
-|---|---|---|---|---|
-| h1  | baseline  | 49.74% | +0.022 | +0.297 |
-| h1  | finetuned | 49.53% | -0.012 | +0.029 |
-| h5  | baseline  | 49.72% | -0.007 | +0.093 |
-| h5  | finetuned | 50.51% | +0.010 | +0.060 |
-| **h30** | **baseline**  | 50.98% | +0.018 | +0.039 |
-| **h30** | **finetuned** | **51.68%** | **+0.050** | **+0.325** |
+| run | universe | 训练区间 | test 样本 | rank-IC (baseline → finetuned) | **ICIR (baseline → finetuned)** | hit_rate | 详情 |
+|---|---|---|---|---|---|---|---|
+| 2026-04-17 | BTC + ETH（2 币） | 2024-01 ~ 2026-04 | 30 万 | +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_RUN.md](docs/CRYPTO_BTC_ETH_RUN.md) |
+| **2026-04-20** | **Binance Spot Top100（100 币）** | **2025-04 ~ 2026-04** | **110 万** | +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_RUN.md](docs/CRYPTO_TOP100_RUN.md) |
 
-- **h30（对齐 preset `return_horizon=30`）rank-IC 提升 184%，ICIR 提升 743%，首次跨过 0.3 的"可入组合"阈值**
-- h1 / h5 基本打平：binance_vision 镜像没有 funding / OI / basis，crypto 特有因子被 pad 为 0，短期预测力被显著削弱
-- 完整流程、踩坑记录、一键复现命令见 [docs/CRYPTO_BTC_ETH_RUN.md](docs/CRYPTO_BTC_ETH_RUN.md)
+- **ICIR 从 0.325 再抬到 0.454**（+40%）—— Top100 把信号的稳定性推过 0.4 线；对组合化使用是最看重的指标。
+- rank-IC 绝对值从 5% 掉到 3%：Top100 里很多小币的 30-min 方向性弱于 BTC/ETH，单券方向 alpha 被稀释，横截面相对强弱 alpha 更凸显。
+- **h1 / h5 两次 run 结果都不理想**：binance_vision 镜像没有 funding / OI / basis，短 horizon 最吃的微观因子被 pad 为 0；Top100 run 里 h1/h5 甚至被模型学成反向信号，详见 CRYPTO_TOP100_RUN.md §7.5。修正方向见文档 §11。
 
 ### A 股日线（对比基线）
 
@@ -267,6 +263,7 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 | [`docs/AUTODL_GUIDE.md`](docs/AUTODL_GUIDE.md) | 本地 Mac → AutoDL 云端 GPU 的完整租卡训练流程 |
 | [`docs/CRYPTO_GUIDE.md`](docs/CRYPTO_GUIDE.md) | 加密货币数据层、OKX/Binance/Binance-Vision 配置、交易所扩展指南 |
 | [`docs/CRYPTO_BTC_ETH_RUN.md`](docs/CRYPTO_BTC_ETH_RUN.md) | **2026-04-17 BTC+ETH 1min 端到端跑通记录** —— 命令、坑、IC 对比结果、一键复现清单 |
+| [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | **2026-04-20 Binance Spot Top100 1min 端到端跑通记录** —— 扩 universe 后 ICIR 抬到 0.454，h1/h5 翻负的原因分析 |
 | [`AGENTS.md`](AGENTS.md) | 仓库操作手册（给 AI agent 和人类协作者看） |
 
 ---
@@ -282,7 +279,8 @@ Kairos/
 │   ├── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）
 │   ├── AUTODL_GUIDE.md             ← AutoDL 租卡训练端到端流程
 │   ├── CRYPTO_GUIDE.md             ← 加密货币数据层 & 交易所扩展指南
-│   └── CRYPTO_BTC_ETH_RUN.md       ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
+│   ├── CRYPTO_BTC_ETH_RUN.md       ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
+│   └── CRYPTO_TOP100_RUN.md        ← Binance Spot Top100 1min 端到端跑通记录 (2026-04-20)
 ├── kairos/                         ← Python 包
 │   ├── __init__.py                 ← 顶层 re-export
 │   ├── data/

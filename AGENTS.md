@@ -48,7 +48,9 @@ Kairos/
 │   ├── AUTODL_GUIDE.md         # 远端 GPU 训练完整手册
 │   ├── TUNING_PLAYBOOK.md      # 调参手册 v1→v2
 │   ├── GLOSSARY.md             # 术语表（新手友好）
-│   └── CRYPTO_GUIDE.md         # 加密货币数据层 & 交易所扩展指南
+│   ├── CRYPTO_GUIDE.md         # 加密货币数据层 & 交易所扩展指南
+│   ├── CRYPTO_BTC_ETH_RUN.md   # 2026-04-17 BTC+ETH 1min 端到端跑通记录
+│   └── CRYPTO_TOP100_RUN.md    # 2026-04-20 Binance Spot Top100 1min 端到端跑通记录
 ├── raw/                        # 原始 parquet（不入库，见 .gitignore）
 ├── finetune/data/processed_datasets/   # 打包后的 *.pkl（不入库）
 ├── artifacts/                  # checkpoint / backtest_report.json（不入库）
