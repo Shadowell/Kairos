@@ -45,13 +45,15 @@ Kairos/
 │   ├── utils/                  # training_utils 等
 │   └── vendor/                 # 第三方 vendored 代码（如 kronos 源码镜像）
 ├── docs/
-│   ├── AUTODL_GUIDE.md         # 远端 GPU 训练完整手册
-│   ├── TUNING_PLAYBOOK.md      # 调参手册 v1→v2
-│   ├── GLOSSARY.md             # 术语表（新手友好）
-│   ├── CRYPTO_GUIDE.md         # 加密货币数据层 & 交易所扩展指南
-│   ├── CRYPTO_BTC_ETH_RUN.md   # 2026-04-17 BTC+ETH 1min 端到端跑通记录
-│   ├── CRYPTO_TOP100_RUN.md    # 2026-04-20 Binance Spot Top100 1min 端到端跑通记录
-│   └── CRYPTO_PERP_PLAN.md     # OKX 永续多通道（funding/OI/basis）改造计划书
+│   ├── AUTODL_GUIDE.md           # 远端 GPU 训练完整手册
+│   ├── TUNING_PLAYBOOK.md        # 调参手册 v1→v2 + 训练/回测常见坑
+│   ├── GLOSSARY.md               # 术语表（新手友好）
+│   ├── CRYPTO_GUIDE.md           # 加密货币数据层 & 交易所扩展指南
+│   ├── CRYPTO_BTC_ETH_RUN.md     # 2026-04-17 BTC+ETH 1min 端到端跑通记录
+│   ├── CRYPTO_TOP100_RUN.md      # 2026-04-20 Binance Spot Top100 1min 端到端跑通记录
+│   ├── CRYPTO_PERP_PLAN.md       # OKX 永续多通道（funding/OI/basis）改造计划书
+│   ├── CRYPTO_PERP_TOP10_30D.md  # 2026-04-20 OKX 永续 Top10 30d run + post-mortem
+│   └── BACKTEST_IC_GUIDE.md      # backtest_ic 的 bucket/stride/horizon 怎么选
 ├── raw/                        # 原始 parquet（不入库，见 .gitignore）
 ├── finetune/data/processed_datasets/   # 打包后的 *.pkl（不入库）
 ├── artifacts/                  # checkpoint / backtest_report.json（不入库）
@@ -223,8 +225,12 @@ EOF
 | OKX funding / OI 历史窗口短 | OKX API 的硬性保留：funding-rate-history ~90 天；contracts/open-interest-history 只返回**最近 ~8 小时**（100 条 × 5m），`after` 游标在这个端点不生效 | **funding**：训练用过去 90 天内数据是 OK 的；更老窗口要接受空表或换 Coinglass。**OI**：目前只能走实时订阅并自己累积落盘；短窗口 smoke 能通，但 Top100 × 1 年训练的 OI 列会是 0（跟旧 BTC/ETH spot run 一样），文档里要明确标出 |
 | `kairos-prepare --train 2026-04-13:2026-04-13` 打包出来每个 symbol 只有 **1 行** | `_slice` 用 `(datetime >= start) & (datetime <= end)`，`end="2026-04-13"` 解析成 `2026-04-13 00:00:00`，分钟级数据只有 00:00 那一条命中 | 分钟级数据的 `--train/--val/--test` 要传 "下一天" 作 end（`2026-04-13:2026-04-14` 表示覆盖 04-13 一整天），或者传完整 ISO timestamp（注意别出现 3 个冒号，`parse_range` 用 `:` 硬切） |
 | `kairos-prepare --train "2026-04-13 08:00:2026-04-14 08:00"` 报 `too many values to unpack (expected 2)` | `parse_range` 直接 `split(":")`，带 `HH:MM` 的 ISO 时间里冒号太多 | 目前解法是避免在 CLI 里写 ISO 时间，退回到日粒度 `YYYY-MM-DD:YYYY-MM-DD`；更优解是后续把 parse 改成 rsplit 或换分隔符 |
+| 训练 log 显示 `[TRAIN] pool=327610, using 5000/epoch.`，10 epoch 跑完 val_ce 只降 0.006，回测出现负迁移 | 之前 mini run 残留了 `KAIROS_N_TRAIN_ITER=5000`，正式 run 没清掉 → 每 epoch 只随机抽 5000 样本 = pool 的 1.5% | **正式 run 前 `unset KAIROS_N_TRAIN_ITER`** 让它走 default 50000；自检看 `using Y/X` 的比例 ≥ 5%。详见 `docs/CRYPTO_PERP_TOP10_30D.md` §8.1 |
+| `backtest_ic --aggregation date` 输出 `n_dates: 3, icir: +1.17`（看着很好但不对劲） | test 区只 3 天 → date bucket 只有 3 个 IC 算 mean/std，ICIR 完全是噪声 | test 区 < 5 天用 `--aggregation none` 看 `overall.spearman`；test 区 ≥ 15 天才看 `by_date_mean`。完整决策树见 `docs/BACKTEST_IC_GUIDE.md` §2 |
+| `--baseline` 跑出来 h30 ICIR=+0.42，看着 Kronos 原权重就有 alpha | random head + Kronos hidden 在 100 symbols × 78 days 尺度下能凑出虚高 ICIR | **必须** 同时报告 baseline 和 finetuned，看 Δ 而不是绝对值。详见 `docs/BACKTEST_IC_GUIDE.md` §5 |
+| 训练 ckpt 被覆盖（如新 perp run 覆盖了上次的 spot ckpt） | `train_predictor.py` 默认写 `artifacts/checkpoints/predictor/checkpoints/best_model/`，不带 run name | 跑新 run 之前先 `cp -r best_model best_model_<run-name>_backup`；下次最好把 best_model 写法改成 hash/timestamp 子目录 |
 
-更多见 `docs/AUTODL_GUIDE.md` 的 "常见坑" 一节。
+更多见 `docs/AUTODL_GUIDE.md` 的 "常见坑" 一节，以及 `docs/CRYPTO_PERP_TOP10_30D.md` 的完整 post-mortem。
 
 ---
 
