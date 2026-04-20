@@ -280,6 +280,46 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 
 ---
 
+## 🗺️ 下一步计划
+
+从 Top10 30d perp post-mortem 沉淀出来的具体待办。**优先按 ROI 排**，每条都带"完成判定"和估计工时（GPU 小时按 RTX 5090 单卡估）。
+
+### Tier 1 · 修 bug / 已知坑（欠的技术债）
+
+| # | 事项 | 完成判定 | 成本 | 依据 |
+|---|---|---|---|---|
+| D1 | **Top10 30d perp 重跑**：清掉 `KAIROS_N_TRAIN_ITER=5000` 残留，用默认 50000 samples/epoch 重训 10 epoch | finetuned rank-IC > baseline；`val_ce` 降幅 > 0.01 | 0.3h 训练 + 0.1h 回测 | [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md) post-mortem |
+| D2 | **扩 perp test 区到 ≥ 15 天**（目前只 3 天 → `n_dates=3` 让 ICIR 全是噪声） | 新数据集 `meta.json` 里 test 区 ≥ 15 天；回测 `n_dates ≥ 15` | 0.2h 打包 + 0.1h 回测 | 同上 |
+| B1 | **修 `backtest_ic` 的 `auto` bucket 逻辑**：当 `n_dates < 10` 时 fallback 到 `none` 并打 warn，避免再看到伪高 ICIR=+1.17 | 新加回归测试 `tests/test_backtest_auto_bucket.py`；`auto` 在小 bucket 数下自动降级 | 0.5h 代码 | [BACKTEST_IC_GUIDE.md](docs/BACKTEST_IC_GUIDE.md) §"常见误读案例" |
+| B2 | **修蜡烛形态 `h == l` 边缘情况**：当根 K 线完全不动时，目前 `amplitude/body_ratio/upper_shadow/lower_shadow` 会被 `1e-9` 分母钳死为 0（Top10 30d 数据里约 5% 的 bar 落入），应改为 NaN 让下游统一 fillna | `body_ratio + upper_shadow + lower_shadow` 在非 NaN 样本上 `max - min < 1e-6`；测试用例覆盖 `h == l` 情况 | 0.5h 代码 | 诊断见 2026-04-20 对话里的微观结构分布验证 |
+| B3 | **修训练 target 的量纲不一致**：`train_predictor.py` 用 `close_diff` cumulative（k=29 比 k=0 量纲大 30×，短 horizon 被长 horizon 主导）；backtest 却用 raw log-return。统一成 per-step log-return + `sqrt(k+1)` 归一化 | h1/h5 IC 在 BTC/ETH 2yr 老数据上不再 ≈ 0 或负；h30 不显著退化 | 1h 代码 + 2h 重训验证 | [TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md) §8.2 |
+
+### Tier 2 · 结构性改进（验证"永续能不能赢现货"）
+
+| # | 事项 | 完成判定 | 成本 | 依据 |
+|---|---|---|---|---|
+| S1 | **Top100 × 90d OKX 永续**（90 天 = funding 历史上限）：首次在 perp 上凑足 ≈ 1300 万样本 | h30 rank-IC ≥ +0.030（Top100 现货 baseline）；funding / basis **非零**覆盖率 > 95% | 0.5h 采集 + 1h 训练 + 0.5h 回测 | ROI 最高的扩容路径 |
+| S2 | **crypto-1min-short preset**：新增 `return_horizon=5` 的 preset，验证永续微观结构对短 horizon 的增量信号 | 短 horizon IC > 同数据的 h30 preset；至少在 BTC/ETH 上成立 | 0.5h preset + 1h 重训 + 回测 | 永续优势理论上应在分钟级显著 |
+| S3 | **Funding / basis 做 regime 异常标签**：把 `\|funding_rate\| > 0.1%` 和 `basis < -0.3%` 显式变成 0/1 列（占 pad slot），而不是让模型自己学极端反转 | 在 Top100 × 90d 数据上，regime=1 时的 hit_rate 比 regime=0 时高 2pp 以上 | 2h 代码 + 重训 + 回测 | 前期讨论里的"防御信号 vs 进攻信号" |
+
+### Tier 3 · 长期方向（需要时间积累或大改）
+
+| # | 事项 | 完成判定 | 成本 | 阻塞点 |
+|---|---|---|---|---|
+| L1 | **OI 实时采集 cron**：AutoDL 起每 1min 打点的 `cron_collect_oi.sh`，落盘到 `raw/crypto/oi_stream/` | 连续运行 4 周无数据空洞；可回放为 `oi_change` 非零列 | 0.5h 写脚本 + **4 周** wall clock | OKX `open_interest_history` 只回溯 ~8 小时 |
+| L2 | **Kronos-base 替换 Kronos-small**：从 5.4M 换到 20M+ 参数，验证模型容量是不是瓶颈 | 同数据上 `val_ce` 降 > 0.05 或 h30 IC +0.01 | 3-4h 训练 + 回测 | — |
+| L3 | **接入 Coinglass / 第三方数据**：拿到 > 90 天的 funding + OI 历史，突破 OKX API 限制 | 能跑 Top100 × 1yr 的 funding/OI 训练集 | 付费 + 1-2d adapter 开发 | 预算 + 数据源选型 |
+| L4 | **A 股分钟级**：在 A 股日线跑不出 alpha 的情况下，试 1min / 5min 频率 | 至少一个 test 区有 h5 rank-IC > +0.02 | 0.5d 采集 + 2h 训练 | akshare 分钟历史深度有限 |
+
+### 不做 / 明确放弃的方向
+
+- **方案 B（重训 Tokenizer）**：成本 ¥2-5k、丢掉 NeoQuasar 预训练权重、还要重新走一遍 Phase 2 架构约束讨论。在方案 A 还没把所有 slot 填满、pad 还没占完之前，不考虑做这个。
+- **再起新的"加一个市场 adapter"需求**（比如外汇 / 黄金）：目前两个 market adapter 已经把 32 维 EXOG schema 的边界问题暴露得比较清楚；先把加密永续这一条跑稳再开新线。
+
+> 进度在 [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md) 结尾"next steps"一节和 [TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md) §8.2 同步更新，完成的条目划掉并标 commit SHA。
+
+---
+
 ## 📚 文档索引
 
 | 文档 | 说明 |
