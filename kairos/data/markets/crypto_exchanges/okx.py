@@ -215,30 +215,52 @@ class OkxExchange(CryptoExchange):
                 "call directly."
             )
 
+        # OKX /public/funding-rate-history pagination quirk:
+        #   * ccxt's ``since`` kwarg is silently ignored by the OKX overlay,
+        #     so we must pass OKX's native ``after`` cursor through params.
+        #   * Per OKX semantics, ``after=T`` returns rows with fundingTime<T
+        #     (older), so to walk from end_ms back to start_ms we start with
+        #     ``after=end_ms`` and move the cursor to the oldest ts + 1.
+        #   * The endpoint only retains ~90 days of history; older windows
+        #     legitimately return empty pages.
         rows: list[dict] = []
-        cursor = start_ms
-        while cursor < end_ms:
+        after_cursor = end_ms
+        safety = 0
+        while safety < 400:  # ~400*100 = 40k rows ceiling
+            safety += 1
             batch = self._ccxt.fetch_funding_rate_history(
-                symbol=symbol, since=cursor, limit=page_limit
+                symbol=symbol,
+                limit=page_limit,
+                params={"after": after_cursor},
             )
             if not batch:
                 break
             rows.extend(batch)
-            last_ts = batch[-1]["timestamp"]
-            if last_ts <= cursor:
+            oldest_ts = min(int(r["timestamp"]) for r in batch)
+            if oldest_ts <= start_ms:
                 break
-            cursor = last_ts + 1
+            if oldest_ts >= after_cursor:  # guard: no progress → stop
+                break
+            after_cursor = oldest_ts
 
-        if not rows:
-            return pd.DataFrame(columns=["funding_rate"])
+        in_window = [
+            r for r in rows
+            if r.get("timestamp") is not None
+            and start_ms <= int(r["timestamp"]) < end_ms
+        ]
+        if not in_window:
+            return pd.DataFrame(
+                {"funding_rate": pd.Series(dtype="float64")},
+                index=pd.DatetimeIndex([], name="datetime"),
+            )
+
         df = pd.DataFrame(
             [
                 {
-                    "timestamp": r["timestamp"],
+                    "timestamp": int(r["timestamp"]),
                     "funding_rate": float(r.get("fundingRate", 0.0)),
                 }
-                for r in rows
-                if start_ms <= r["timestamp"] < end_ms
+                for r in in_window
             ]
         )
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(None)
@@ -270,18 +292,32 @@ class OkxExchange(CryptoExchange):
             raise ValueError(f"freq {freq!r} not supported; see {list(_FREQ_TO_TIMEFRAME)}")
 
         tf = _FREQ_TO_TIMEFRAME[freq]
-        rows = self._ccxt.fetch_open_interest_history(
+        # OKX's /rubik/stat/contracts/open-interest-history caps at ~90 days
+        # of retention and uses ``begin``/``end`` as an inclusive window.
+        # Pass those via ccxt params to avoid the "Illegal time range" that
+        # OKX returns when the server-side default window collides with our
+        # ``since``.
+        rows_raw = self._ccxt.fetch_open_interest_history(
             symbol=symbol,
             timeframe=tf,
-            since=start_ms,
             limit=min(500, (end_ms - start_ms) // _TIMEFRAME_MS[tf] + 1),
+            params={"begin": start_ms, "end": end_ms},
         )
-        if not rows:
-            return pd.DataFrame(columns=["open_interest"])
+        rows = rows_raw or []
+        in_window = [
+            r for r in rows
+            if r.get("timestamp") is not None
+            and start_ms <= int(r["timestamp"]) < end_ms
+        ]
+        if not in_window:
+            return pd.DataFrame(
+                {"open_interest": pd.Series(dtype="float64")},
+                index=pd.DatetimeIndex([], name="datetime"),
+            )
         df = pd.DataFrame(
             [
                 {
-                    "timestamp": r["timestamp"],
+                    "timestamp": int(r["timestamp"]),
                     "open_interest": float(
                         r.get("openInterestAmount")
                         or r.get("openInterestValue")
@@ -289,8 +325,7 @@ class OkxExchange(CryptoExchange):
                         or 0.0
                     ),
                 }
-                for r in rows
-                if start_ms <= r["timestamp"] < end_ms
+                for r in in_window
             ]
         )
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(None)

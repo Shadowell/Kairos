@@ -96,29 +96,45 @@ class _FakeOkx:
             rows.append([ts, base, base + 1, base - 1, base + 0.5, 1.0])
         return rows
 
-    def fetch_funding_rate_history(self, symbol: str, since: int, limit: int):
-        # The fake has exactly 3 funding settlements starting at a fixed epoch;
-        # subsequent paginated calls (since > last fake ts) return empty so
-        # the adapter's cursor loop terminates cleanly.
+    def fetch_funding_rate_history(
+        self, symbol: str, since: int | None = None, limit: int = 100,
+        params: dict | None = None,
+    ):
+        # The fake has exactly 3 funding settlements starting at a fixed epoch.
+        # The real OKX adapter paginates *backwards* via params={"after": T}
+        # returning rows with ts < T; mimic that here so the adapter's
+        # cursor-advance loop terminates on one pass.
         step_ms = 8 * 3_600_000
         origin = 1_700_000_000_000
         all_rows = [
             {"timestamp": origin + i * step_ms, "fundingRate": 0.0001 * (i + 1)}
             for i in range(3)
         ]
-        return [r for r in all_rows if r["timestamp"] >= since][:limit]
+        params = params or {}
+        after = params.get("after")
+        if after is not None:
+            return [r for r in all_rows if r["timestamp"] < int(after)][:limit]
+        # ccxt's generic ``since`` path (older tests).
+        if since is not None:
+            return [r for r in all_rows if r["timestamp"] >= since][:limit]
+        return all_rows[:limit]
 
     def fetch_open_interest_history(
-        self, symbol: str, timeframe: str, since: int, limit: int
+        self, symbol: str, timeframe: str, since: int | None = None,
+        limit: int = 100, params: dict | None = None,
     ):
         step_ms = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000}[timeframe]
+        params = params or {}
+        # Real adapter now passes {"begin": start_ms, "end": end_ms}.
+        begin = params.get("begin", since if since is not None else 0)
+        end = params.get("end", begin + step_ms * 5)
         rows = []
-        n = min(limit, 5)
-        for i in range(n):
-            rows.append({
-                "timestamp": since + i * step_ms,
-                "openInterestAmount": 1000.0 + i,
-            })
+        n_max = min(limit, 5, max(1, (end - begin) // step_ms))
+        for i in range(n_max):
+            ts = begin + i * step_ms
+            if ts >= end:
+                break
+            rows.append({"timestamp": ts, "openInterestAmount": 1000.0 + i})
         return rows
 
     def _origin_ms(self, timeframe: str) -> int:
