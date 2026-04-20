@@ -50,7 +50,8 @@ Kairos/
 │   ├── GLOSSARY.md             # 术语表（新手友好）
 │   ├── CRYPTO_GUIDE.md         # 加密货币数据层 & 交易所扩展指南
 │   ├── CRYPTO_BTC_ETH_RUN.md   # 2026-04-17 BTC+ETH 1min 端到端跑通记录
-│   └── CRYPTO_TOP100_RUN.md    # 2026-04-20 Binance Spot Top100 1min 端到端跑通记录
+│   ├── CRYPTO_TOP100_RUN.md    # 2026-04-20 Binance Spot Top100 1min 端到端跑通记录
+│   └── CRYPTO_PERP_PLAN.md     # OKX 永续多通道（funding/OI/basis）改造计划书
 ├── raw/                        # 原始 parquet（不入库，见 .gitignore）
 ├── finetune/data/processed_datasets/   # 打包后的 *.pkl（不入库）
 ├── artifacts/                  # checkpoint / backtest_report.json（不入库）
@@ -211,6 +212,8 @@ EOF
 | `numpy` 2.x 导致 torch 崩 | 版本冲突 | `pip install "numpy<2"` |
 | DDP 在 CPU 上跑不起来 | 默认 nccl | `training_utils.setup_ddp` 已自动切 gloo |
 | 办公网封了 OKX / Binance 主站 | GFW + 公司白名单 | 用 `--exchange binance_vision` 走 `data-api.binance.vision` 现货镜像，只能拉现货 K 线（没有 funding/OI/basis） |
+| AutoDL 默认走不通 `api.okx.com` / `fapi.binance.com` | DNS 污染 + `/etc/network_turbo` 的 Squid 只白名单 github/hf | 在 AutoDL 上装 mihomo (Clash Meta) + 机场订阅；`flag=meta` 取 YAML；预下载 `Country.mmdb` + `GeoSite.dat` + `geoip.dat` 放到 `-d` 目录；GLOBAL 默认是 `DIRECT`，要用 `PUT /proxies/GLOBAL` 切到具体节点（US 节点实测最快，~1.1s/req）。完整步骤见 `docs/CRYPTO_PERP_PLAN.md` |
+| `--market crypto` 跑出来 `funding_rate` / `oi_change` / `basis` / `btc_dominance` 四列全是 0 | `kairos-collect` 只采 OHLCV，`prepare_dataset` 不传 `extras`，adapter 的 `_align_series` 对缺失 series 就 fillna(0) | 要么接受（当前 BTC/ETH + Top100 现货 run 都是如此），要么走 `docs/CRYPTO_PERP_PLAN.md` 的多通道改造 |
 | 用 `binance_vision` 拉出来的 parquet 时间范围偏移 | `_to_unix_ms` 用 naive local time 转 UTC | 预期行为，对 24/7 crypto 不影响训练；真要精确 UTC 日界就手动传完整 ISO 时间 |
 | 本机 macOS `torchrun --standalone` 长时间卡在一堆 `IPv6 ... gai error: 8` 警告 | macOS 对本机 hostname 解析到 IPv6 失败，`torchrun` 的 rendezvous server 挂在主机名上等超时 | 单卡/本机 smoke 不用 torchrun，直接 `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`；AutoDL/GPU 机仍正常用 torchrun |
 | smoke 时 `OneCycleLR` 抛 `ZeroDivisionError: float division by zero` | `total_steps = epochs * steps_per_epoch` 过小时 `int(pct_start * total_steps)` 退化为 0，阶段边界重合 | `KAIROS_SMOKE=1` 已经把 `n_train_iter` 设到 200、`warmup_pct=0.2`，保证 `total_steps ≥ ~50`；自定义 smoke 时也要守这一下限 |
