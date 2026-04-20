@@ -1,6 +1,12 @@
-# Core dependencies — install with: pip install -r requirements.txt
-# For editable install + CLI entry points: pip install -e '.[serve,train]'
+# Kairos — pip install -r requirements.txt
+#
+# This file mirrors pyproject.toml [project.dependencies] for environments
+# that need a plain requirements file (e.g. Docker, CI).
+#
+# Preferred install method: pip install -e '.[train,crypto]'
+# (gives you CLI entry points + optional extras in one go)
 
+# ---- core ----
 numpy
 pandas>=2.0
 pyarrow>=14
@@ -12,10 +18,15 @@ huggingface_hub>=0.24
 akshare>=1.14
 matplotlib>=3.7
 
-# --- optional: serve ---
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.5
-
-# --- optional: experiment tracking ---
+# ---- optional: train (pip install -e '.[train]') ----
+# scipy>=1.10
 # comet-ml>=3.39
+
+# ---- optional: crypto (pip install -e '.[crypto]') ----
+# ccxt>=4.3
+# python-dotenv>=1.0
+
+# ---- optional: serve (pip install -e '.[serve]') ----
+# fastapi>=0.110
+# uvicorn[standard]>=0.29
+# pydantic>=2.5

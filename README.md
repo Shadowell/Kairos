@@ -261,11 +261,14 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 | 文档 | 说明 |
 |---|---|
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | 术语速查 —— K 线 / Transformer / IC / 分位回归，带例子解释。**第一次接触这些名词先看这里** |
-| [`docs/TUNING_PLAYBOOK.md`](docs/TUNING_PLAYBOOK.md) | 调参手册 v1→v2，云成本对比，避坑指南 |
+| [`docs/TUNING_PLAYBOOK.md`](docs/TUNING_PLAYBOOK.md) | 调参手册 v1→v2，训练/回测常见坑 |
+| [`docs/BACKTEST_IC_GUIDE.md`](docs/BACKTEST_IC_GUIDE.md) | IC 回测的 bucket / stride / horizon 怎么选，常见误读案例 |
 | [`docs/AUTODL_GUIDE.md`](docs/AUTODL_GUIDE.md) | 本地 Mac → AutoDL 云端 GPU 的完整租卡训练流程 |
 | [`docs/CRYPTO_GUIDE.md`](docs/CRYPTO_GUIDE.md) | 加密货币数据层、OKX/Binance/Binance-Vision 配置、交易所扩展指南 |
-| [`docs/CRYPTO_BTC_ETH_RUN.md`](docs/CRYPTO_BTC_ETH_RUN.md) | **2026-04-17 BTC+ETH 1min 端到端跑通记录** —— 命令、坑、IC 对比结果、一键复现清单 |
-| [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | **2026-04-20 Binance Spot Top100 1min 端到端跑通记录** —— 扩 universe 后 ICIR 抬到 0.454，h1/h5 翻负的原因分析 |
+| [`docs/CRYPTO_BTC_ETH_RUN.md`](docs/CRYPTO_BTC_ETH_RUN.md) | BTC+ETH 1min 端到端跑通记录（2026-04-17）|
+| [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | Binance Spot Top100 1min 端到端跑通记录（2026-04-20）|
+| [`docs/CRYPTO_PERP_PLAN.md`](docs/CRYPTO_PERP_PLAN.md) | OKX 永续多通道（funding/OI/basis）改造方案 |
+| [`docs/CRYPTO_PERP_TOP10_30D.md`](docs/CRYPTO_PERP_TOP10_30D.md) | OKX Top10 30d perp run + post-mortem（2026-04-20）|
 | [`AGENTS.md`](AGENTS.md) | 仓库操作手册（给 AI agent 和人类协作者看） |
 
 ---
@@ -275,46 +278,55 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 ```
 Kairos/
 ├── README.md / LICENSE / pyproject.toml / requirements.txt
-├── AGENTS.md                       ← AI coding agent 的仓库操作手册
+├── AGENTS.md                         ← AI coding agent 的仓库操作手册
+├── .env.example                      ← 环境变量模板（API key / proxy / HF）
 ├── docs/
-│   ├── GLOSSARY.md                 ← 术语速查（新手先看这个）
-│   ├── TUNING_PLAYBOOK.md          ← 详细调优手册（云成本对比、避坑指南）
-│   ├── AUTODL_GUIDE.md             ← AutoDL 租卡训练端到端流程
-│   ├── TUNING_PLAYBOOK.md          ← 调参手册 v1→v2 + 训练/回测常见坑
-│   ├── GLOSSARY.md                 ← 术语表（IC / Rank-IC / ICIR / 早停 / 分布偏移...）
-│   ├── CRYPTO_GUIDE.md             ← 加密货币数据层 & 交易所扩展指南
-│   ├── CRYPTO_BTC_ETH_RUN.md       ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
-│   ├── CRYPTO_TOP100_RUN.md        ← Binance Spot Top100 1min 端到端跑通记录 (2026-04-20)
-│   ├── CRYPTO_PERP_PLAN.md         ← OKX 永续多通道（funding/OI/basis）改造方案
-│   ├── CRYPTO_PERP_TOP10_30D.md    ← OKX Top10 30d perp run + post-mortem (2026-04-20)
-│   └── BACKTEST_IC_GUIDE.md        ← backtest_ic 的 bucket/stride/horizon 怎么选（避免误读）
-├── kairos/                         ← Python 包
-│   ├── __init__.py                 ← 顶层 re-export
+│   ├── GLOSSARY.md                   ← 术语速查（新手先看这个）
+│   ├── TUNING_PLAYBOOK.md            ← 调参手册 v1→v2 + 训练/回测常见坑
+│   ├── BACKTEST_IC_GUIDE.md          ← IC 回测 bucket/stride/horizon 怎么选
+│   ├── AUTODL_GUIDE.md               ← AutoDL 租卡训练端到端流程
+│   ├── CRYPTO_GUIDE.md               ← 加密货币数据层 & 交易所扩展指南
+│   ├── CRYPTO_BTC_ETH_RUN.md         ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
+│   ├── CRYPTO_TOP100_RUN.md          ← Binance Spot Top100 1min 跑通记录 (2026-04-20)
+│   ├── CRYPTO_PERP_PLAN.md           ← OKX 永续多通道（funding/OI/basis）改造方案
+│   └── CRYPTO_PERP_TOP10_30D.md      ← OKX Top10 30d perp run + post-mortem
+├── kairos/                           ← Python 包（唯一 import 入口）
+│   ├── __init__.py                   ← 顶层 re-export
 │   ├── data/
-│   │   ├── collect.py              ← 多市场 CLI dispatcher
-│   │   ├── markets/                ← MarketAdapter 抽象 + ashare / crypto 实现
-│   │   │   └── crypto_exchanges/   ← ccxt 封装：okx / binance_vision / ...
-│   │   ├── common_features.py      ← 24 维通用因子
-│   │   ├── features.py             ← 组装 common + adapter 专属 = 32 维
-│   │   └── prepare_dataset.py      ← 生成 train/val/test.pkl + meta.json
+│   │   ├── collect.py                ← 多市场 CLI dispatcher (kairos-collect)
+│   │   ├── common_features.py        ← 24 维通用因子
+│   │   ├── crypto_extras.py          ← funding/OI/spot sidecar 加载
+│   │   ├── features.py               ← 组装 common + adapter 专属 = 32 维
+│   │   ├── prepare_dataset.py        ← 生成 train/val/test.pkl + meta.json
+│   │   └── markets/                  ← MarketAdapter 抽象 + ashare / crypto 实现
+│   │       └── crypto_exchanges/     ← ccxt 封装：okx / binance_vision / ...
 │   ├── models/
-│   │   └── kronos_ext.py           ← KronosWithExogenous + QuantileReturnHead
+│   │   └── kronos_ext.py             ← KronosWithExogenous + QuantileReturnHead
 │   ├── training/
-│   │   ├── config.py               ← TrainConfig + preset_for(name)
-│   │   ├── dataset.py              ← KronosDataset（跨市场通用）
+│   │   ├── config.py                 ← TrainConfig + preset_for(name)
+│   │   ├── dataset.py                ← KronosDataset（跨市场通用）
 │   │   ├── train_tokenizer.py
-│   │   ├── train_predictor.py      ← 支持 KAIROS_* env 覆盖超参
-│   │   └── backtest_ic.py          ← IC / Rank-IC / ICIR，支持 --baseline
+│   │   ├── train_predictor.py        ← 支持 KAIROS_* env 覆盖超参
+│   │   └── backtest_ic.py            ← IC / Rank-IC / ICIR，支持 --baseline
 │   ├── deploy/
 │   │   ├── push_to_hf.py
 │   │   └── serve.py
 │   ├── utils/
-│   │   └── training_utils.py       ← DDP / 种子 / 工具
-│   └── vendor/kronos/              ← 官方 Kronos 模型源码（vendored）
+│   │   └── training_utils.py         ← DDP / 种子 / 工具
+│   └── vendor/kronos/                ← 官方 Kronos 模型源码（vendored）
+├── scripts/
+│   ├── autodl_bootstrap.sh           ← AutoDL 一键初始化（venv + hf mirror + smoke）
+│   ├── package_and_upload.sh         ← 打包 + scp 到 AutoDL
+│   └── smoke_crypto_extras.py        ← crypto extras 离线 smoke test
 ├── examples/
-│   └── inference_quickstart.py
+│   ├── inference_quickstart.py       ← 推理快速上手
+│   └── crypto_top100_universe.md     ← Top100 冻结名单（2026-04-20 快照）
 └── tests/
-    └── test_features.py
+    ├── test_features.py
+    ├── test_ashare_adapter.py
+    ├── test_binance_vision.py
+    ├── test_crypto_adapter.py
+    └── test_multi_market.py
 ```
 
 ---
