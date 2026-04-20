@@ -98,11 +98,13 @@ class OkxExchange(CryptoExchange):
 
         proxy = self.config.resolve_proxy()
         if proxy:
-            # ccxt accepts a per-instance proxy via the `proxies` mapping on
-            # the underlying session; using the documented `https_proxy`
-            # attribute is the supported cross-venue knob.
+            # ccxt >=4.5 refuses to run with both http_proxy and https_proxy
+            # set (it reports "multiple conflicting proxy settings"). OKX
+            # endpoints are all HTTPS, so only wire the https side. We also
+            # clear http_proxy explicitly in case the env resolver leaked a
+            # non-empty value through a previous config.
             self._ccxt.https_proxy = proxy
-            self._ccxt.http_proxy = proxy
+            self._ccxt.http_proxy = None
             log.info(f"OKX adapter using proxy: {proxy}")
 
     # ------------------------------------------------------------------
