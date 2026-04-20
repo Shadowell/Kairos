@@ -26,7 +26,7 @@ raw/
 artifacts/
 outputs/
 finetune/data/
-data/
+/data/
 *.parquet
 *.pkl
 *.safetensors

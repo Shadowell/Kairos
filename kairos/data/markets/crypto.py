@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -247,6 +247,122 @@ class CryptoAdapter(MarketAdapter):
         )
 
     # ------------------------------------------------------------------
+    # Auxiliary channels (funding / open interest / spot basis)
+    # ------------------------------------------------------------------
+    def fetch_extras(
+        self,
+        task: FetchTask,
+        kinds: "Iterable[str]",
+        *,
+        oi_freq: str = "5min",
+    ) -> "dict[str, pd.DataFrame]":
+        """Fetch the auxiliary channels listed in ``kinds`` for one symbol.
+
+        Parameters
+        ----------
+        task : FetchTask
+            Same fetch window / symbol as :meth:`fetch_ohlcv`; only ``freq``
+            is used to pick a sensible OI timeframe and to drive spot
+            collection cadence.
+        kinds : iterable of str
+            Subset of :data:`kairos.data.crypto_extras.ALL_KINDS`. Unknown
+            kinds are ignored so callers can just pass the raw CLI flag
+            through.
+        oi_freq : str
+            OKX only exposes OI history at ``1m/5m/15m/1h/...`` granularity
+            but the 1m endpoint returns empty for most symbols, so default
+            to ``5min`` which is the densest grain that reliably has data.
+
+        Returns
+        -------
+        dict
+            Keys are the extras kinds (``"funding"`` / ``"open_interest"`` /
+            ``"spot"``), values are DataFrames with ``datetime`` +
+            single payload column ready to be handed to
+            :mod:`kairos.data.crypto_extras` writers.
+
+        Notes
+        -----
+        * This method is **not** on the :class:`MarketAdapter` ABC because
+          it is crypto-specific. ``kairos.data.collect`` imports the
+          adapter directly and only calls this when ``market == "crypto"``
+          and ``--crypto-extras`` is non-empty.
+        * Exchanges that don't implement a particular endpoint surface as
+          ``AttributeError`` / ``RuntimeError``; we log and skip rather
+          than aborting the whole task.
+        """
+
+        from .. import crypto_extras as _ce
+
+        kinds = {k for k in kinds if k in _ce.ALL_KINDS}
+        if not kinds:
+            return {}
+
+        start_ms = _to_unix_ms(task.start)
+        end_ms = _to_unix_ms(task.end, end_of_day=True)
+        out: dict[str, pd.DataFrame] = {}
+        ex = self.exchange
+
+        if _ce.KIND_FUNDING in kinds:
+            hook = getattr(ex, "fetch_funding_rate_history", None)
+            if hook is None:
+                log.warning(
+                    f"exchange {ex.name!r} has no fetch_funding_rate_history; "
+                    "skipping funding"
+                )
+            else:
+                try:
+                    df = hook(task.symbol, start_ms=start_ms, end_ms=end_ms)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"[{task.symbol}] funding fetch failed: {e}")
+                else:
+                    if df is not None and len(df) > 0:
+                        out[_ce.KIND_FUNDING] = _reset_datetime_index(df)
+
+        if _ce.KIND_OI in kinds:
+            hook = getattr(ex, "fetch_open_interest_history", None)
+            if hook is None:
+                log.warning(
+                    f"exchange {ex.name!r} has no fetch_open_interest_history; "
+                    "skipping OI"
+                )
+            else:
+                try:
+                    df = hook(task.symbol, freq=oi_freq, start_ms=start_ms, end_ms=end_ms)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"[{task.symbol}] OI fetch failed: {e}")
+                else:
+                    if df is not None and len(df) > 0:
+                        out[_ce.KIND_OI] = _reset_datetime_index(df)
+
+        if _ce.KIND_SPOT in kinds:
+            hook = getattr(ex, "fetch_spot_ohlcv", None)
+            if hook is None:
+                log.warning(
+                    f"exchange {ex.name!r} has no fetch_spot_ohlcv; "
+                    "skipping spot basis"
+                )
+            else:
+                spot_symbol = _perp_to_spot_symbol(task.symbol)
+                try:
+                    df = hook(
+                        spot_symbol,
+                        freq=task.freq,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"[{task.symbol}] spot {spot_symbol} fetch failed: {e}")
+                else:
+                    if df is not None and len(df) > 0:
+                        # fetch_spot_ohlcv returns the canonical STD_COLS; we
+                        # only keep datetime + close for basis computation.
+                        spot = df[["datetime", "close"]].copy()
+                        out[_ce.KIND_SPOT] = spot
+
+        return out
+
+    # ------------------------------------------------------------------
     # Market-specific features
     # ------------------------------------------------------------------
     def market_features(
@@ -354,6 +470,33 @@ def _to_unix_ms(value: str | datetime, end_of_day: bool = False) -> int:
         # Treat a bare date as inclusive of the whole day.
         ts = ts.replace(hour=23, minute=59, second=59, microsecond=999_000)
     return int(ts.timestamp() * 1000)
+
+
+def _reset_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Lift a DatetimeIndex into a column so the extras writer can handle it.
+
+    The exchange helpers (``fetch_funding_rate_history`` etc.) usually
+    return DataFrames indexed by datetime; :mod:`crypto_extras` writers
+    expect a ``datetime`` *column* instead.
+    """
+
+    if isinstance(df.index, pd.DatetimeIndex) and "datetime" not in df.columns:
+        out = df.reset_index().rename(columns={df.index.name or "index": "datetime"})
+        return out
+    return df
+
+
+def _perp_to_spot_symbol(perp_symbol: str) -> str:
+    """Map ``BTC/USDT:USDT`` → ``BTC/USDT`` for the spot basis channel.
+
+    ccxt encodes a USDT-margined perpetual as ``BASE/QUOTE:SETTLE``; the
+    spot market for basis computation is the plain ``BASE/QUOTE`` form.
+    If the symbol already looks like a spot one we pass it through.
+    """
+
+    if ":" in perp_symbol:
+        return perp_symbol.split(":", 1)[0]
+    return perp_symbol
 
 
 # ---------------------------------------------------------------------------
