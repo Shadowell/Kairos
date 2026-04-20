@@ -117,13 +117,37 @@ model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-small-crypto")
  (HF Hub)           (FastAPI /predict)
 ```
 
-### 为什么能一套 checkpoint 跨市场
+### Kairos vs Kronos：数据维度对比
 
-- `kairos.data.common_features` 固定给出 **24 维通用因子**（动量 / 波动率 / 均线偏离 / 量价 / 蜡烛形态 / 日历编码）。
-- 每个市场 adapter 额外给出 **8 维市场专属因子**（A 股：换手 / 相对指数；crypto：funding / OI / basis / btc_dominance / hour_sin,cos）。
-- 两者相加 **严格等于 32 维 `EXOG_COLS`**，Phase 2 架构硬约束（`build_features` 直接 assert）。
+Kairos 的数据入口与 Kronos 原版**完全向后兼容**——只在原有两条通道之外额外多了一条旁路外生变量通道 `EXOG`（默认 32 维）和一个分位回归头，不改动 tokenizer 的 `d_in`。
+
+| 通道 | Kronos 原版 | Kairos | 融合方式 |
+|---|---|---|---|
+| **价量**（tokenizer `d_in`） | 6 维：`open, high, low, close, volume, amount` | **6 维（不变）** | → `KronosTokenizer` BSQ 量化为 `(s1_bits, s2_bits)` token |
+| **时间戳**（TemporalEmbedding） | 5 维：`minute, hour, weekday, day, month` | **5 维（不变）** | → 在 transformer 输入端**加**到 token embedding 上 |
+| **外生因子**（ExogenousEncoder） | — | **32 维 `EXOG_COLS`** = 24 通用 + 8 市场专属 | → `Linear→SiLU→Linear→RMSNorm→gate·tanh`，与 token + time embedding **相加**；`gate` **零初始化**，第一步等价 Kronos |
+| **预测头** | next-token CE（s1/s2 双头） | **CE（不变）** + `QuantileReturnHead`（分位回归头，方案 C） | `CE + quantile_weight · pinball` 联合损失 |
+
+32 维 `EXOG_COLS` 的具体构成（代码在 [`kairos/data/common_features.py`](kairos/data/common_features.py) 和 `kairos/data/markets/<name>.py`）：
+
+| 分组 | 维度 | 列名（节选） |
+|---|---|---|
+| 通用 · 收益率 | 3 | `log_ret_1 / 5 / 20` |
+| 通用 · 动量 | 4 | `rsi_14, macd_hist, roc_5, roc_20` |
+| 通用 · 波动率 | 3 | `atr_14, parkinson_20, vol_std_20` |
+| 通用 · 均线偏离 | 3 | `ma{5,20,60}_dev` |
+| 通用 · 布林 / 量价 | 5 | `boll_z, obv_z, mfi_14, amount_z, vwap_dev` |
+| 通用 · 蜡烛微观结构 | 4 | `amplitude, upper_shadow, lower_shadow, body_ratio` |
+| 通用 · 预留 pad | 2 | `pad_common_0, pad_common_1` |
+| **市场专属**（A 股） | 8 | `turnover, turnover_z, is_quarter_end, days_to_holiday, excess_ret_index, index_ret, pad_ashare_0, pad_ashare_1` |
+| **市场专属**（crypto） | 8 | `funding_rate, funding_rate_z, oi_change, basis, btc_dominance, hour_sin, hour_cos, pad_crypto_0` |
+
+**为什么能一套 checkpoint 跨市场**
+
+- 通用 24 维只依赖 OHLCV，任何市场都算得出来。
+- 每个市场 adapter 都**严格贡献 8 维**市场专属因子——Phase 2 架构硬约束（`build_features` 直接 assert）。
 - 模型侧 `n_exog=32` 对所有市场一致；要替换因子就占 pad slot 或换掉某个 slot，**永远不扩维度**。
-- 结果：同一个 checkpoint 可以在 A 股 / crypto / 未来的外汇黄金上加载运行，权重迁移零成本。
+- 结果：同一个 checkpoint 可以在 A 股 / crypto / 未来的外汇黄金上加载运行，权重迁移零成本；加载 Kronos 官方权重时，147 层里能直接 reuse 136 层，只有 `exog_encoder` + `return_head` 需要随机初始化。
 
 ---
 
