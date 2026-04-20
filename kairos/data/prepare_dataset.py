@@ -95,6 +95,7 @@ def process_symbol(
     rng: Optional[np.random.Generator] = None,
     market: str = "ashare",
     exog_cols: Optional[list[str]] = None,
+    extras: Optional[dict] = None,
 ):
     """Build per-symbol train/val/test frames.
 
@@ -117,7 +118,9 @@ def process_symbol(
     if "amount" in df.columns and df["amount"].isna().all():
         df["amount"] = df["close"] * df["volume"]
 
-    df = build_features(df, index_df, market=market, symbol=path.stem)
+    df = build_features(
+        df, index_df, market=market, symbol=path.stem, extras=extras,
+    )
 
     # Kronos 期待列名 vol/amt（对齐 finetune/config.py feature_list）
     df = df.rename(columns={"volume": "vol", "amount": "amt"})
@@ -216,6 +219,22 @@ def main():
         paths = paths[: args.limit]
     print(f"共 {len(paths)} 只股票待处理")
 
+    # Crypto: pick up the sidecar funding/OI/spot parquet that
+    # ``kairos-collect --crypto-extras ...`` dropped next to the OHLCV.
+    # For every other market this stays an empty dict and changes nothing.
+    extras_channels: list[str] = []
+    if args.market == "crypto":
+        from kairos.data import crypto_extras as _ce
+
+        extras_channels = _ce.available_channels(raw_dir)
+        if extras_channels:
+            print(f"[extras] discovered channels under {raw_dir}: {extras_channels}")
+        else:
+            print(
+                f"[extras] no _extras/ sidecar found under {raw_dir}; "
+                "funding/OI/basis columns will fall back to zero."
+            )
+
     train_data, val_data, test_data = {}, {}, {}
     exog_train, exog_val, exog_test = {}, {}, {}
 
@@ -229,6 +248,15 @@ def main():
         sym = p.stem
         # 每只股票用独立的子 rng，保证可复现且相互独立
         sub_rng = np.random.default_rng(master_rng.integers(0, 2**31 - 1))
+        sym_extras: Optional[dict] = None
+        if extras_channels:
+            from kairos.data import crypto_extras as _ce
+
+            # ``p.stem`` is already the sanitized-symbol form that
+            # ``kairos-collect`` wrote both for OHLCV and sidecars.
+            sym_extras = _ce.load_for_symbol(
+                raw_dir, p.stem, kinds=extras_channels
+            )
         try:
             pieces = process_symbol(
                 p, index_df,
@@ -242,6 +270,7 @@ def main():
                 rng=sub_rng,
                 market=args.market,
                 exog_cols=exog_cols,
+                extras=sym_extras,
             )
         except Exception as e:
             print(f"[{sym}] 失败: {e}")
@@ -283,6 +312,7 @@ def main():
             "val": args.val,
             "test": args.test,
         },
+        "extras_channels": extras_channels,
     }
     with open(out_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
