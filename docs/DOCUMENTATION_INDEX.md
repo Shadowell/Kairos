@@ -1,99 +1,99 @@
-# Kairos 文档导航
+# Kairos Documentation Index
 
-> 这份文档解决一个问题：**你现在要做的事，对应应该看哪篇文档。**
-> 根 README 只讲项目概览；这里按任务把所有文档重新归类。
+> This document answers one question: **which document you should read for the task you want to do right now.**
+> The root README only covers the project overview; this page reorganizes all documents by task.
 
 ---
 
-## 1. 第一次进入仓库
+## 1. First Time In The Repository
 
-按这个顺序读：
+Recommended reading order:
 
 1. [CONCEPTS_AND_GLOSSARY.md](CONCEPTS_AND_GLOSSARY.md)
-   先统一术语。IC、Rank-IC、ICIR、teacher forcing、interleave split 这些词都在这里。
+   First unify the terminology. The words IC, Rank-IC, ICIR, teacher forcing, interleave split are all here.
 2. [README.md](../README.md)
-   看项目定位、当前结果、公开模型、最短上手路径。
+   Look at the project positioning, current results, public models, and the shortest getting started path.
 3. [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md)
-   如果你打算真正跑训练，这是远端 GPU 的标准工作流。
+   If you plan to actually run training, this is the standard workflow for remote GPUs.
 
 ---
 
-## 2. 按任务找文档
+## 2. Find documents by task
 
-### 我想理解模型 / 指标 / 训练逻辑
+### I want to understand the model, metrics, or training logic
 
 - [CONCEPTS_AND_GLOSSARY.md](CONCEPTS_AND_GLOSSARY.md)
-  术语、概念、指标的统一解释。
+  Unified explanation of terms, concepts, and indicators.
 - [TRAINING_TUNING_PLAYBOOK.md](TRAINING_TUNING_PLAYBOOK.md)
-  训练参数怎么调，哪些坑最常见，怎么定位问题。
+  How to adjust training parameters, which pitfalls are the most common, and how to locate problems.
 - [BACKTEST_IC_INTERPRETATION_GUIDE.md](BACKTEST_IC_INTERPRETATION_GUIDE.md)
-  回测参数怎么选，报告里的指标怎么读，哪些结论不可信。
+  How to choose backtest parameters, how to read the indicators in the report, and which conclusions are not trustworthy.
 
-### 我想跑数据采集 / 打包 / 训练
+### I want to run data collection / packaging / training
 
 - [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md)
-  从本地开发到远端 GPU 训练、回传 checkpoint 的完整流程。
+  The complete process from local development to remote GPU training and checkpoint return.
 - [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)
-  crypto 数据源、交易所、代理、网络限制、扩展接入。
+  crypto data source, exchange, proxy, network restrictions, extended access.
 - [CRYPTO_BTC_ETH_TOKENIZER_RUN.md](CRYPTO_BTC_ETH_TOKENIZER_RUN.md)
-  tokenizer 微调和评测的完整流程。
+  The complete process of tokenizer fine-tuning and evaluation.
 
-### 我想看已经做过哪些实验
+### I want to see what experiments have been done
 
 - [CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md)
-  BTC/ETH 两币两年现货 predictor 基线实验。
+  BTC/ETH two-year spot predictor baseline experiment for two currencies.
 - [CRYPTO_TOP100_1Y_SPOT_RUN.md](CRYPTO_TOP100_1Y_SPOT_RUN.md)
-  Binance Spot Top100 一年 predictor 扩容实验。
+  Binance Spot Top100 one-year predictor expansion experiment.
 - [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)
-  OKX 永续 Top10 30 天实验复盘，重点是失败原因和诊断方法。
+  OKX perpetual Top10 30-day experiments post-mortem, focusing on the causes of failure and diagnostic methods.
 
-### 我想知道接下来该做什么
+### I want to know what to do next
 
 - [PROJECT_ROADMAP_AND_NEXT_STEPS.md](PROJECT_ROADMAP_AND_NEXT_STEPS.md)
-  当前路线图、优先级、验收标准、工时估算。
+  Current roadmap, priorities, acceptance criteria, and time estimates.
 - [CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md)
-  永续多通道数据改造的专项计划。
+  A special plan for perpetual multi-channel data transformation.
 
 ---
 
-## 3. 按角色找文档
+## 3. Find documents by role
 
-### 研究 / 策略视角
+### Research / Strategic Perspective
 
 - [README.md](../README.md)
 - [BACKTEST_IC_INTERPRETATION_GUIDE.md](BACKTEST_IC_INTERPRETATION_GUIDE.md)
 - [PROJECT_ROADMAP_AND_NEXT_STEPS.md](PROJECT_ROADMAP_AND_NEXT_STEPS.md)
 
-### 工程 / 训练视角
+### Engineering / Training Perspective
 
 - [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md)
 - [TRAINING_TUNING_PLAYBOOK.md](TRAINING_TUNING_PLAYBOOK.md)
 - [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)
 
-### AI coding agent / 仓库维护视角
+### AI coding agent / repository maintenance
 
 - [AGENTS.md](../AGENTS.md)
-  仓库规则、提交要求、目录约定、已知坑。
+  Repository rules, submission requirements, directory conventions, and known pitfalls.
 
 ---
 
-## 4. 文档分层约定
+## 4. Documents layering convention
 
-后续新增文档时，按下面规则放置：
+When adding documents later, place them according to the following rules:
 
 - `README.md`
-  只放项目概览、核心结果、上手入口、公开模型，不再堆放细节流程和路线图。
+  Only put the project overview, core results, getting started entry, and public model, and no longer stack the detailed process and roadmap.
 - `DOCUMENTATION_INDEX.md`
-  只做导航，不承载详细技术内容。
+  It is only for navigation and does not carry detailed technical content.
 - `*_GUIDE.md`
-  讲“怎么做”，偏操作手册。
+  Talking about "how to do it" is more about operation manual.
 - `*_PLAYBOOK.md`
-  讲“如何调优/排障”，偏经验总结。
+  Talking about "how to tune/troubleshoot" is more about summarizing experience.
 - `*_RUN.md`
-  讲一次成功实验的完整记录。
+  Tell a complete record of a successful experiment.
 - `*_POSTMORTEM.md`
-  讲失败实验的复盘和根因分析。
+  Talk about post-mortem and root cause analysis of failed experiments.
 - `*_PLAN.md`
-  讲未完成的改造方案和设计取舍。
+  Talk about unfinished renovation plans and design choices.
 
-这套命名的目标是：**看到文件名就知道这篇文档是指南、实验记录、计划书，还是复盘。**
+The goal of this set of naming is: **When you see the file name, you can know whether the documents are a guide, a run log, a plan, or a post-mortem. **

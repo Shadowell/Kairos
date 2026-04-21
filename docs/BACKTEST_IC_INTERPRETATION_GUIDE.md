@@ -1,29 +1,29 @@
-# Backtest IC 配置与结果解读指南
+# Backtest IC configuration and results interpretation guide
 
-> 怎么用 `kairos.training.backtest_ic` 拿到**统计上可信**的 IC / Rank-IC / ICIR，避免被 bucket / stride / horizon 选错带偏。
+> How to use `kairos.training.backtest_ic` to get **statistically credible** IC / Rank-IC / ICIR to avoid being biased by wrong selection of bucket / stride / horizon.
 >
-> 这份文档的存在源于 [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) 那次 post-mortem —— 同一个 ckpt + 数据，光是 `--aggregation` 选错，"看起来很好的 ICIR=+1.17" 和 "看起来负迁移的 ICIR=-0.06" 能同时出现在两份报告里。
+> The existence of this document stems from [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) that post-mortem - the same ckpt + data, just because `--aggregation` chose the wrong one, "ICIR=+1.17 that looks good" and "ICIR=-0.06 that looks like negative migration" can appear in two reports at the same time.
 >
-> 术语（IC / Rank-IC / ICIR / hit_rate）见 [`CONCEPTS_AND_GLOSSARY.md`](CONCEPTS_AND_GLOSSARY.md)。
+> Terms (IC / Rank-IC / ICIR / hit_rate) see [`CONCEPTS_AND_GLOSSARY.md`](CONCEPTS_AND_GLOSSARY.md).
 
 ---
 
-## 0. 30 秒速查
+## 0. 30 second quick search
 
-| 你想要的 | `--aggregation` | `--horizons` | `--stride` | 看 report 里的 |
+|what you want| `--aggregation` | `--horizons` | `--stride` |Look in the report|
 |---|---|---|---|---|
-| 横截面选股 alpha（生产用） | `date`（n_dates ≥ 15） | 跟 preset `return_horizon` 对齐 | 1 | `by_date_mean.h{H}.rank_ic / icir` |
-| pooled "方向预测能力" | `none` | 1, 5, 30 都看 | 1 或 5 | `overall.h{H}.spearman / hit_rate` |
-| CPU smoke 验证 | `none` | 1 | 60 + `--per-symbol-limit 50` | `overall` 不为 NaN 即可 |
-| 高频/分钟级横截面（≥10 symbols × ≥15 天 test） | `minute` 谨慎用 | 1, 5 | 1 | `by_date_mean`（注意 SE） |
+|Cross-sectional stock picking alpha (for production purposes)| `date`(n_dates ≥ 15) |Align with preset `return_horizon`| 1 | `by_date_mean.h{H}.rank_ic / icir` |
+|pooled "Direction prediction ability"| `none` |1, 5, 30 all viewed|1 or 5| `overall.h{H}.spearman / hit_rate` |
+|CPU smoke verification| `none` | 1 | 60 + `--per-symbol-limit 50` |`overall` As long as it is not NaN|
+|High frequency/minute level cross section (≥10 symbols × ≥15 days test)|`minute` Use with caution| 1, 5 | 1 |`by_date_mean` (note SE)|
 
-**最重要的反模式**：test 区只 3 天却看 `--aggregation date` 的 ICIR —— 那个数字的统计意义≈ 抛 3 次硬币的方差，无论是 +1.17 还是 -0.6 都不能解读为 alpha 信号。
+**The most important anti-pattern**: Looking at the ICIR of `--aggregation date` when the test zone is only 3 days old - the statistical significance of that number ≈ the variance of 3 coin tosses, neither +1.17 nor -0.6 can be interpreted as an alpha signal.
 
 ---
 
-## 1. 输出字段含义
+## 1. Output field meaning
 
-回测 JSON 长这样：
+backtest JSON looks like this:
 
 ```json
 {
@@ -43,28 +43,28 @@
 }
 ```
 
-### 1.1 `overall`（pooled）
+### 1.1 `overall`(pooled)
 
-把所有 `(score, return)` 对扔到一起算单个 Pearson / Spearman / hit_rate。
+Throw all `(score, return)` pairs together and count a single Pearson / Spearman / hit_rate.
 
-- **优点**：n 大（几万到几百万），统计 SE 小，p-value 直接可信。
-- **缺点**：信号源混了（不同时刻、不同 symbol），不反映"在某一时刻 rank 这一组 symbol 的能力"。
-- **什么时候看**：sanity check（baseline 应该接近 0，finetuned 显著偏离 0），或 test 区太短没法做时间聚合时**唯一**可信的数字。
+- **Advantages**: n is large (tens of thousands to millions), statistical SE is small, and p-value is directly reliable.
+- **Disadvantages**: The signal sources are mixed (different times, different symbols), which does not reflect "the ability to rank this group of symbols at a certain time".
+- **When to look**: sanity check (baseline should be close to 0, finetuned deviates significantly from 0), or the **only** credible number when the test area is too short to do time aggregation.
 
-### 1.2 `by_date_mean`（cross-sectional → 时间平均）
+### 1.2 `by_date_mean` (cross-sectional → time average)
 
-按 `bucket` 把样本分组（每天 / 每小时 / 每分钟一个 bucket），每 bucket 内独立算 cross-sectional IC，再对 buckets 取平均：
-- `ic`：每 bucket 的 Pearson IC 的平均
-- `rank_ic`：每 bucket 的 Spearman IC 的平均
-- `icir`：`mean(IC) / std(IC)` —— 信息比率
-- `n_dates`：non-NaN 的 bucket 数
+Group the samples according to `bucket` (one bucket per day/hour/minute), calculate the cross-sectional IC independently in each bucket, and then average the buckets:
+- `ic`: Average Pearson IC per bucket
+- `rank_ic`: Average Spearman IC per bucket
+- `icir`: `mean(IC) / std(IC)` —— Information ratio
+- `n_dates`: non-NaN bucket number
 
-- **优点**：直接对应"我每天/每小时给出排名，长期下来 rank 的能力"，是组合化使用最看重的指标。
-- **缺点**：每 bucket 内样本数 = 该时刻有多少个 symbol；如果只有 2-3 个 symbol，bucket IC 几乎是噪声。
+- **Advantages**: Directly corresponds to "I give rankings every day/hourly, and the ability to rank in the long run" is the most important indicator for combined use.
+- **Disadvantages**: The number of samples in each bucket = how many symbols there are at that moment; if there are only 2-3 symbols, the bucket IC is almost noise.
 
 ---
 
-## 2. `--aggregation` 怎么选
+## 2. `--aggregation` How to choose
 
 ```python
 # kairos/training/backtest_ic.py L53-63
@@ -76,102 +76,102 @@ _BUCKET_ALIASES = {
 }
 ```
 
-`auto` 当前实现永远返回 `date`，对**短 test 区**不友好（[CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md §8.3](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)）。
+`auto` The current implementation always returns `date`, which is not friendly to the **short test area** ([CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md §8.3](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)).
 
-### 选择决策树
+### Select decision tree
 
 ```
 n_test_days < 5
-    └─ 用 --aggregation none，看 overall（pooled），忽略 by_date_mean
-n_test_days ≥ 15 且 n_symbols ≥ 5
-    └─ 默认 --aggregation date（最常用）
-n_test_days ≥ 5 且 freq=1min 且 n_symbols ≥ 10
-    └─ 可选 --aggregation hour 或 minute（每 bucket 样本 ≥ 10 才有意义）
+└─ Use --aggregation none to see overall (pooled) and ignore by_date_mean
+n_test_days ≥ 15 and n_symbols ≥ 5
+└─Default --aggregation date (most commonly used)
+n_test_days ≥ 5 and freq=1min and n_symbols ≥ 10
+└─ Optional --aggregation hour or minute (only meaningful when samples per bucket are ≥ 10)
 ```
 
-### 2.1 每个 bucket 的最少样本量
+### 2.1 Minimum sample size per bucket
 
-| n_per_bucket | 单 bucket Pearson IC 的标准误 | 评价 |
+| n_per_bucket |Standard error of single bucket Pearson IC|evaluate|
 |---|---|---|
-| 2 | 不可计算（需 ≥3） | NaN |
-| 3 | ~0.71 | 完全是噪声 |
-| 5 | ~0.50 | 极不稳 |
-| 10 | ~0.35 | 噪声大；多 bucket 平均后能用 |
+| 2 |Not computable (requires ≥3)| NaN |
+| 3 | ~0.71 |Total noise|
+| 5 | ~0.50 |Extremely unstable|
+| 10 | ~0.35 |Noisy; can be used after averaging multiple buckets|
 | 30 | ~0.19 | OK |
-| 100 | ~0.10 | 好 |
-| 1000 | ~0.032 | 非常稳 |
+| 100 | ~0.10 |good|
+| 1000 | ~0.032 |Very stable|
 
-经验法则：每 bucket 样本数 ≥ 30 才能开始相信单 bucket 的 IC；< 10 时只看 `mean(IC)` 不要看 `ICIR`（标准差被噪声主导，ICIR 是分母上的噪声放大）。
+Rule of thumb: Only when the number of samples per bucket is ≥ 30 can you start to trust the IC of a single bucket; when < 10, only look at `mean(IC)` and not `ICIR` (the standard deviation is dominated by noise, and ICIR is the noise amplification in the denominator).
 
-### 2.2 总 bucket 数（n_dates）
+### 2.2 Total bucket number (n_dates)
 
-| n_dates | `mean(IC)` 的 SE（假设单 bucket SE = 0.1） | ICIR 是否可信 |
+| n_dates |SE of `mean(IC)` (assuming single bucket SE = 0.1)|Is ICIR credible?|
 |---|---|---|
-| 3 | 0.058 | ❌ 完全不可信（[`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7.2 的 +1.17/+0.06 都是噪声） |
-| 10 | 0.032 | ⚠️ 勉强 |
-| 30 | 0.018 | ✅ 可以挂模型选择上 |
-| 100+ | 0.010 | ✅ 可以做 paper / 上线决策 |
+| 3 | 0.058 |❌ Completely untrustworthy ([`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7.2’s +1.17/+0.06 are all noise)|
+| 10 | 0.032 |⚠️ Barely|
+| 30 | 0.018 |✅ You can select models|
+| 100+ | 0.010 |✅ Can make paper/online decisions|
 
 ---
 
-## 3. `--stride` 怎么选
+## 3. `--stride` How to choose
 
-`--stride N` 表示每 N 根 bar 取一个起始窗口。
+`--stride N` means taking a starting window for every N bars.
 
 ### 3.1 trade-off
 
-- **stride=1**：所有 bar 都做起点，n_records 最大，IC 估计 SE 最小，但慢且相邻样本相关性高（autocorrelated）。
-- **stride > 1**：n_records 缩小 N 倍，单 bucket SE 放大 √N 倍，但 wallclock 也快 N 倍。
+- **stride=1**: All bars are used as starting points, n_records is the largest, IC estimate SE is the smallest, but it is slow and adjacent samples are highly correlated (autocorrelated).
+- **stride > 1**: n_records is reduced by N times, single bucket SE is enlarged by √N times, but the wallclock is also N times faster.
 
-### 3.2 经验
+### 3.2 Experience
 
-| 场景 | 推荐 stride |
+|scene|Recommended stride|
 |---|---|
-| 全量 GPU 回测（生产） | 1 |
-| 快速迭代 / 多次 sweep | 5-10 |
-| Top100 × 1 年 1min（[`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md)） | 10（stride=1 估 8h+，stride=10 估 45min） |
+|Full GPU backtest (production)| 1 |
+|Fast iteration/multiple sweeps| 5-10 |
+|Top100 × 1 year 1min ([`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md))|10 (stride=1 estimates 8h+, stride=10 estimates 45min)|
 | CPU smoke | 60 + `--per-symbol-limit 50` |
 
-### 3.3 `--per-symbol-limit` 的坑
+### 3.3 `--per-symbol-limit`’s Pitfalls
 
-`--per-symbol-limit N` 给每个 symbol 等距抽 N 个起点。**问题**：抽出的时间戳 symbol 之间不对齐，每 bucket 只剩 1-2 个 symbol，cross-sectional IC 全 NaN。
+`--per-symbol-limit N` Draw N starting points at equal intervals for each symbol. **Problem**: The extracted timestamp symbols are not aligned, there are only 1-2 symbols left in each bucket, and the cross-sectional IC is all NaN.
 
-- ✅ smoke 时只看 `--aggregation none` 的 `overall`
-- ✅ 想保留 bucket 对齐：用 `--stride 60`（所有 symbol 共用同一组偏移），别用 `--per-symbol-limit`
+- ✅ When smoking, only look at `--aggregation none`’s `overall`
+- ✅ If you want to preserve bucket alignment: use `--stride 60` (all symbols share the same set of offsets), do not use `--per-symbol-limit`
 
 ---
 
-## 4. `--horizons` 怎么选
+## 4. `--horizons` How to choose
 
-预设 `crypto-1min` 训练时 `return_horizon=30`，pinball loss 的 target 是 `close[t+k+1] - close[t]` (k=0..29) 的 cumulative diff —— 量纲随 k 线性增大，**k=29 主导整个 loss**，模型实际只优化"未来第 30 步"。
+By default, when `crypto-1min` is trained `return_horizon=30`, the target of pinball loss is the cumulative diff of `close[t+k+1] - close[t]` (k=0..29) - the dimension increases linearly with k, **k=29 dominates the entire loss**, and the model actually only optimizes "the 30th step in the future".
 
-| h | 监督强度 | 预期 IC 表现 |
+| h |Supervision intensity|Expected IC performance|
 |---|---|---|
-| 1, 5 | 弱（cumulative diff 在 k=0,4 上 loss 项小一个数量级） | 接近 0 或 ~baseline |
-| 30 | 强（与 `return_horizon` 对齐） | 主信号 |
-| 60+ | 完全外推 | 噪声 |
+| 1, 5 |Weak (cumulative diff on k=0,4 the loss term is an order of magnitude smaller)|Close to 0 or ~baseline|
+| 30 |Strong (aligned with `return_horizon`)|main signal|
+| 60+ |Complete extrapolation|noise|
 
-**结论**：用 `crypto-1min` preset 训出来的 ckpt，**回测时把 `--horizons` 设为包含 30**（如 `1,5,30`），主看 h30；h1 / h5 仅作 sanity（如果 h1 显著负、h30 显著正，说明模型把短 horizon 当成了"长 horizon 的反向预警"，正常）。
+**Conclusion**: Using ckpt trained with `crypto-1min` preset, **set `--horizons` to include 30** (such as `1,5,30`) during the backtest, mainly looking at h30; h1 / h5 are only used for sanity (if h1 is significantly negative and h30 is significantly positive, it means that the model regards the short horizon as a "reverse warning of the long horizon", which is normal).
 
-如果你换了 preset，把 `--horizons` 跟 `cfg.return_horizon` 对齐。
+If you change the preset, align `--horizons` with `cfg.return_horizon`.
 
-详细的训练 target 设计问题见 [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §8.2 和 [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) §8.
+For detailed training target design issues, see [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §8.2 and [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) §8.
 
 ---
 
-## 5. 必须跑的 `--baseline` 对照
+## 5. Must run `--baseline` comparison
 
-`--baseline` 模式加载 Kronos-small 原权重 + **随机初始化的 exog encoder + return head**，输出的 score 是"hidden state 经过随机 fc 之后"的值。
+`--baseline` Pattern loading Kronos-small original weight + **randomly initialized exog encoder + return head**, the output score is the value of "hidden state after random fc".
 
-### 5.1 为什么 baseline 不是 0
+### 5.1 Why baseline is not 0
 
-直觉上随机 head IC 应该 ≈ 0，但实际 baseline 在 pooled 上经常有 |IC| > 0.02（[`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7.3）：
+Intuitively, random head IC should be ≈ 0, but in fact, baseline often has pooled|IC| > 0.02([`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7.3): 
 
-> Kronos transformer 主干（136 层 reuse）在 hidden state 里已经编码了"未来分布"的方向信息；random fc 会以一个固定的随机投影把它映射到 score 空间，**这个投影对所有 (score, return) 对是一致的**，所以 pooled 时能蹭到一些方向 IC。
+> The Kronos transformer backbone (layer 136 reuse) has encoded the direction information of "future distribution" in the hidden state; random fc will map it to the score space with a fixed random projection. **This projection is consistent for all (score, return) pairs**, so some direction ICs can be caught when pooled.
 
-实践含义：**只看 finetuned 的绝对 IC 没意义，必须看 finetuned - baseline 的 Δ**。
+Practical implications: **It is meaningless to only look at the absolute IC of finetuned. You must look at the Δ** of finetuned - baseline.
 
-### 5.2 推荐的两次回测调用
+### 5.2 Recommended two backtest calls
 
 ```bash
 # 1. baseline
@@ -190,14 +190,14 @@ python -m kairos.training.backtest_ic \
     --out artifacts/<run>/backtest_finetuned.json
 ```
 
-然后用对比脚本（参考 [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7 末尾的对比表生成器）拉一张 baseline / finetuned / Δ 三列表。
+Then use the comparison script (refer to the comparison table generator at the end of [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §7) to pull a three-table table of baseline / finetuned / Δ.
 
-### 5.3 Sanity regression：每次大改完代码跑一遍
+### 5.3 Sanity regression: Run it every time after major changes to the code
 
-为了确保你改 `train_predictor.py` / `backtest_ic.py` / `kronos_ext.py` 没破坏既有 alpha，固定跑这一步：
+To ensure that your changes to `train_predictor.py` / `backtest_ic.py` / `kronos_ext.py` do not destroy the existing alpha, always run this step:
 
 ```bash
-# 加载老 BTC/ETH 数据 + 老 ckpt
+# Load old BTC/ETH data + old ckpt
 python -u -m kairos.training.backtest_ic \
     --ckpt artifacts/checkpoints/predictor/checkpoints/best_model_btceth_backup \
     --preset crypto-1min \
@@ -206,41 +206,41 @@ python -u -m kairos.training.backtest_ic \
     --out artifacts/sanity/btceth_$(date +%F).json
 ```
 
-预期 h30 by_date_mean rank_ic ≈ +0.024（stride=5），ICIR ≈ +0.15。差异 > 50% 就要去查 git log。
+Expected h30 by_date_mean rank_ic ≈ +0.024 (stride=5), ICIR ≈ +0.15. If the difference is > 50%, check the git log.
 
 ---
 
-## 6. 常见误读案例
+## 6. Common misunderstanding cases
 
-### 6.1 "ICIR=+1.17 太好了！"
+### 6.1 "ICIR=+1.17 Great!"
 
-实际是 `n_dates=3`。3 个 IC 的标准差几乎完全是噪声方差。**先看 n_dates，再看 ICIR**。
+It’s actually `n_dates=3`. The standard deviation of 3 ICs is almost entirely the noise variance. **Look at n_dates first, then ICIR**.
 
-### 6.2 "baseline 的 h30 ICIR=+0.42 说明 Kronos 原权重就有 alpha"
+### 6.2 "The baseline's h30 ICIR=+0.42 indicates that the original weight of Kronos has alpha"
 
-random head + Kronos hidden 在 100 个 symbol × 78 天的尺度下能凑出虚高 ICIR（[`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md) §7.5）。**只看 Δ（finetuned - baseline）**。
+Random head + Kronos hidden can produce a falsely high ICIR on the scale of 100 symbols × 78 days ([`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md) §7.5). **Look only at Δ (finetuned - baseline)**.
 
-### 6.3 "finetuned 的 IC 是 +0.003，模型有用！"
+### 6.3 "The IC of finetuned is +0.003, the model works!"
 
-p-value 不显著就别声称有用。在 n=40k 上，Spearman IC ≥ 0.01 才大概率 p < 0.05；Spearman IC ≥ 0.02 才稳过。
+Don't claim to be useful if the p-value is not significant. On n=40k, Spearman IC ≥ 0.01 will have a high probability of p < 0.05; Spearman IC ≥ 0.02 will be stable.
 
-### 6.4 "by_date_mean 的 IC 是负的，模型废了"
+### 6.4 "The IC of by_date_mean is negative and the model is useless"
 
-可能是 bucket 选错了（n_per_bucket 太小，IC 噪声大）。先用 `--aggregation none` 看 pooled，pooled 也是负的才是真负。
+It may be that the bucket is selected incorrectly (n_per_bucket is too small, and the IC noise is large). First use `--aggregation none` to see pooled. If pooled is also negative, it is truly negative.
 
-### 6.5 "h1 是负 IC，模型预测反了"
+### 6.5 "h1 is a negative IC, and the model prediction is wrong"
 
-如果 preset `return_horizon=30`，h1 / h5 是模型没被监督的 horizon，被 cumulative-diff target 主导后甚至可能学成 h30 的反向信号。这是 loss 设计的副作用，不是模型 buggy。**只信 horizon 与 `return_horizon` 对齐的那档**。
+If preset `return_horizon=30`, h1 / h5 are unsupervised horizons of the model, and may even learn the reverse signal of h30 after being dominated by the cumulative-diff target. This is a side effect of the loss design, not model buggy. **Only trust the file whose horizon is aligned with `return_horizon`**.
 
 ---
 
-## 7. 即将做的代码改进（TODO，未实施）
+## 7. Upcoming code improvements (TODO, not implemented)
 
-按 ROI 排：
+Sorted by ROI:
 
-1. **`_BUCKET_ALIASES.auto` 增加 `n_dates < 10` 时降级到 pooled 的逻辑**，并在 stdout 打印 warning。
-2. **`backtest_ic` 的 report JSON 加 `n_per_bucket_avg` 字段**，让 reader 一眼看出 bucket IC 是否可信。
-3. **`dataset.py` 在 print pool 时加 `using {pct:.1%} of pool`**，pct < 5% 时 warning（避免 [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §8.1 那种 KAIROS_N_TRAIN_ITER 残留陷阱）。
-4. **训练 pinball target 量纲**改成 raw log-return + per-k normalization，让 h1/h5 也有真实监督信号。
+1. **`_BUCKET_ALIASES.auto` The logic of downgrading to pooled when adding `n_dates < 10`**, and printing warning on stdout.
+2. **`backtest_ic`’s report JSON adds the `n_per_bucket_avg` field**, allowing the reader to see at a glance whether the bucket IC is trustworthy.
+3. **`dataset.py` Add `using {pct:.1%} of pool`** when printing pool, warning when pct < 5% (avoid the KAIROS_N_TRAIN_ITER residual trap like [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) §8.1).
+4. **Training pinball target dimension** is changed to raw log-return + per-k normalization, so that h1/h5 also has real supervision signals.
 
-实施前请先在 [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) §8 留 issue 记录、跑一次 §5.3 sanity regression 确保不破坏现有 alpha。
+Before implementation, please leave an issue record in [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) §8 and run §5.3 sanity regression once to ensure that the existing alpha is not destroyed.

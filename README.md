@@ -1,71 +1,71 @@
 # Kairos
 
-> 抓住 **正确的时机**。
+> Seize **the right moment**.
 >
-> **Kairos** 是基于 [Kronos](https://github.com/shiyu-coder/Kronos) 基础模型的**多市场微调 + 部署工具箱**。
-> 开箱即用的数据采集、因子工程、外生通道扩展、分位回归头、跨市场回测、HuggingFace 一键上传和 FastAPI 推理服务。
+> **Kairos** is a **multi-market fine-tuning and deployment toolbox** built on top of the [Kronos](https://github.com/shiyu-coder/Kronos) foundation model.
+> It includes data collection, feature engineering, exogenous-channel extensions, quantile-return heads, cross-market backtests, one-command Hugging Face deployment, and a FastAPI inference service.
 
 <p align="center">
-<em>Kronos 管时间 · Kairos 管机会</em>
+<em>Kronos handles time · Kairos handles opportunity</em>
 </p>
 
 ---
 
-## ✨ 特性
+## ✨ Features
 
-- **多市场数据层** — 统一 `MarketAdapter` 抽象，内置 A 股（akshare 多源 fallback）、加密货币（ccxt OKX 永续 / Binance Vision 镜像）两个 adapter，可扩展到 Binance / Bybit / 外汇 / 黄金等
-- **共享因子 schema** — 24 维通用因子 + 8 维市场专属因子 = 固定 32 维 `EXOG_COLS`，**同一个模型 checkpoint 跨市场通用**，无未来信息泄漏
-- **模型** — `KronosWithExogenous`：在 Kronos 之上加外生变量旁路通道 + 分位回归头，**完全兼容预训练权重**（147 层里 136 层直接 reuse）
-- **训练** — `torchrun` 启动的 DDP 训练，渐进解冻 + 早停 + OneCycleLR + pinball loss；全量 env override（`KAIROS_BATCH_SIZE` 等）无需改代码就能调参
-- **回测** — `backtest_ic` 直接吃 `meta.json` 自动推 market/freq，支持 `--baseline` 拿 Kronos 原权重做对比，输出 overall / by-date / by-hour 三种 bucket 的 IC / Rank-IC / ICIR
-- **部署** — 一键 push 到 Hugging Face Hub + FastAPI 实时推理服务
+- **multi-market data layer** — unified `MarketAdapter` abstraction, built-in A-shares (akshare multi-source fallback), crypto (ccxt OKX perpetual / Binance Vision mirror) two adapters, can be extended to Binance / Bybit / foreign exchange / gold, etc.
+- **Shared factor schema** — 24-dimensional common factor + 8-dimensional market-specific factor = fixed 32-dimensional `EXOG_COLS`, **the same model checkpoint reusable across markets**, no future information leakage
+- **Model** — `KronosWithExogenous`: Add exogenous variable bypass channel + quantile regression head on top of Kronos, **fully compatible with pre-training weights** (136 of the 147 layers can be directly reused)
+- **Training** — DDP training started by `torchrun`, progressive unfreezing + early stopping + OneCycleLR + pinball loss; full env override (`KAIROS_BATCH_SIZE`, etc.) can adjust parameters without changing the code
+- **backtest** — `backtest_ic` reads `meta.json` directly, auto-detects market/freq, supports `--baseline` comparisons against original Kronos weights, and reports IC / Rank-IC / ICIR for overall, by-date, and by-hour buckets
+- **Deployment** — One-click push to Hugging Face Hub + FastAPI real-time inference service
 
 ---
 
-## 🧭 从哪里开始读
+## 🧭 Where To Start
 
-README 只保留**项目概览、上手入口、当前结果和核心架构**。更细的操作步骤、实验记录和路线图都拆到了 `docs/`。
+This README only keeps the **project overview, getting-started entry points, current results, and core architecture**. Detailed workflows, experiment logs, and the research roadmap live in `docs/`.
 
-| 你现在要做什么 | 先看哪份文档 |
+| What you want to do now | Which document to read first |
 |---|---|
-| 第一次接触仓库，想知道有哪些文档 | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
-| 想快速理解术语、指标和项目背景 | [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) |
-| 想在远端 GPU 上复现实验 | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
-| 想跑 crypto 数据采集 / 训练 / 回测 | [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) |
-| 想看已经跑过的实验结果 | [docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md), [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md), [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) |
-| 想看接下来该做什么 | [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) |
+| First time in the repository and want to see the document map | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
+| Quickly understand terminology, metrics, and project background | [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) |
+| Reproduce experiments on a remote GPU | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
+| Run crypto data collection, training, or backtests | [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) |
+| Review completed experiments | [docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md), [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md), [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) |
+| See the current roadmap and next steps | [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) |
 
 ---
 
-## 📈 核心成果
+## 📈 Core results
 
-### 加密货币 1-min 微调
+### Crypto 1-Minute Fine-Tuning
 
-**四次 run 的 h30 对比**（horizon 对齐 preset `return_horizon=30`；硬件：单卡 RTX 5090）：
+**h30 comparison of four runs** (horizon alignment preset `return_horizon=30`; hardware: single card RTX 5090):
 
-| run | universe | 训练区间 | test 样本 | rank-IC (baseline → finetuned) | **ICIR (baseline → finetuned)** | hit_rate | 详情 |
+| Run date | Universe | Training interval | Test sample size | Rank-IC (baseline → finetuned) | **ICIR (baseline → finetuned)** | Hit rate | Details |
 |---|---|---|---|---|---|---|---|
-| 2026-04-17 | BTC + ETH（2 币） | 2024-01 ~ 2026-04 | 30 万 | +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) |
-| 2026-04-20 | Binance Spot Top100（100 币） | 2025-04 ~ 2026-04 | 110 万 | +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
-| 2026-04-21 | BTC + ETH（2 币，`Kronos-base`） | 2024-01 ~ 2026-04 | 30 万 | +0.055 → **+0.076** | +0.325 → **+0.484** | 52.9% | [Shadowell/Kairos-base-crypto](https://huggingface.co/Shadowell/Kairos-base-crypto) |
-| 2026-04-20 ⚠️ | OKX **永续 Top10**（首次拿到真实 funding/basis） | 2026-03-21 ~ 2026-04-17（30d） | 4 万 | +0.008 → +0.016 (n=3 噪声) | +1.17 → +0.06 (n=3 噪声) | 50.9% | [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)（**post-mortem**）|
+| 2026-04-17 |BTC + ETH (2 coins)| 2024-01 ~ 2026-04 |300,000| +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) |
+| 2026-04-20 |Binance Spot Top100 (100 coins)| 2025-04 ~ 2026-04 |1.1 million| +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
+| 2026-04-21 |BTC + ETH (2 coins, `Kronos-base`)| 2024-01 ~ 2026-04 |300,000| +0.055 → **+0.076** | +0.325 → **+0.484** | 52.9% | [Shadowell/Kairos-base-crypto](https://huggingface.co/Shadowell/Kairos-base-crypto) |
+| 2026-04-20 ⚠️ | OKX **perpetual Top10** (first run with real funding/basis) | 2026-03-21 ~ 2026-04-17 (30d) | 40,000 | +0.008 → +0.016 (n=3 noise) | +1.17 → +0.06 (n=3 noise) | 50.9% | [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) (**post-mortem**) |
 
-- **ICIR 从 0.325 再抬到 0.454**（+40%）—— Top100 把信号的稳定性推过 0.4 线；对组合化使用是最看重的指标。
-- **`Kronos-base` 在同一套 BTC/ETH 数据上继续抬升到 `rank-IC=+0.076 / ICIR=+0.484`**，说明当前瓶颈不只是 universe，模型容量本身也在起作用。
-- rank-IC 绝对值从 5% 掉到 3%：Top100 里很多小币的 30-min 方向性弱于 BTC/ETH，单券方向 alpha 被稀释，横截面相对强弱 alpha 更凸显。
-- **h1 / h5 两次 run 结果都不理想**：binance_vision 镜像没有 funding / OI / basis，短 horizon 最吃的微观因子被 pad 为 0；Top100 run 里 h1/h5 甚至被模型学成反向信号，详见 CRYPTO_TOP100_1Y_SPOT_RUN.md §7.5。修正方向见文档 §11。
-- **永续 Top10 30d run（⚠️）链路打通了**——首次把 OKX 真实非零 `funding_rate` 和 `basis` 喂进 32 维 exog；但训练效果是负迁移，root cause 是 `KAIROS_N_TRAIN_ITER=5000` 残留 + test 区只 3 天 + bucket 选错三层叠加，**代码本身没 regression**（用老数据复跑老结果通过）。完整 post-mortem 见 [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)，也能当 "怎么读 IC 报告" 的反面教材；正面教材是 [BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md)。
+- **ICIR rises from 0.325 to 0.454** (+40%). The Top100 run pushes signal stability past the 0.4 line, which is the main reason it matters.
+- **`Kronos-base` reaches `rank-IC=+0.076 / ICIR=+0.484`** on the same BTC/ETH dataset, suggesting the current bottleneck is not only the universe size but also model capacity.
+- The absolute rank-IC drops from 5% to 3% on Top100. Many smaller coins have weaker 30-minute directional alpha than BTC/ETH, so single-name alpha is diluted while cross-sectional relative-strength alpha becomes more important.
+- **h1 / h5 are still weak**. The `binance_vision` mirror does not provide funding / OI / basis, so several short-horizon microstructure factors are padded to zero. In the Top100 run, h1/h5 are even learned as reverse signals. See `CRYPTO_TOP100_1Y_SPOT_RUN.md` §7.5 and the tuning guide for follow-up directions.
+- **The perpetual Top10 30d run is a failure case, not a success story.** It is the first run with real non-zero `funding_rate` and `basis` in the 32-dimensional exogenous feature set, but it suffered negative transfer because of leftover `KAIROS_N_TRAIN_ITER=5000`, an overly short 3-day test window, and the wrong bucket choice. The code path itself did not regress. See [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) for the full write-up and [BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) for the positive checklist.
 
-### A 股日线（对比基线）
+### A-shares daily line (compared to baseline)
 
-训了两版（time-split v1 + interleave-split v2），test IC 都为负，结论：在现成 EXOG schema 下 A 股日线信号偏弱。下一步方向（调权重冻结策略、改监督信号、换到分钟级）写在 [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md)。
+After training two versions (time-split v1 + interleave-split v2), the test ICs are all negative. Conclusion: The A-shares daily signal is weak under the ready-made EXOG schema. The next step (adjust weight freezing strategy, change supervision signal, switch to minute level) is written in [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md).
 
-### 已发布模型
+### Published model
 
-| Hub repo | 数据 | base model | 说明 |
+| Hub repo | Data | Base model | Notes |
 |---|---|---|---|
-| [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | 上表 h30 那行的 checkpoint；tokenizer 复用上游 [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) |
-| [`Shadowell/Kairos-base-crypto`](https://huggingface.co/Shadowell/Kairos-base-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-base`](https://huggingface.co/NeoQuasar/Kronos-base) | `Kronos-base` predictor 微调版；官方 tokenizer；当前 h30 `rank-IC=+0.076 / ICIR=+0.484` |
+| [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) |The checkpoint of row h30 in the above table; the tokenizer reuses the upstream [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base)|
+| [`Shadowell/Kairos-base-crypto`](https://huggingface.co/Shadowell/Kairos-base-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-base`](https://huggingface.co/NeoQuasar/Kronos-base) |`Kronos-base` predictor fine-tuning version; official tokenizer; current h30 `rank-IC=+0.076 / ICIR=+0.484`|
 
 ```python
 from kairos import KronosTokenizer
@@ -77,20 +77,20 @@ model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-small-crypto")
 
 ---
 
-## 🏗️ 架构
+## 🏗️ Architecture
 
-### 数据流水线（多市场）
+### Data pipeline (multi-market)
 
 ```
  ┌────────────┐   ┌──────────────┐   ┌───────────────────┐
  │ akshare /  │   │ ccxt (OKX    │   │ data-api.binance  │
- │ 东财 /腾讯 │   │ 永续,默认)   │   │ .vision (现货镜像)│   … 其他 adapter
- │ 新浪       │   │              │   │                   │
+│ Dongcai/Tencent │ │perpetual,default) │ │ .vision (spot mirror)│ … other adapters
+│ Sina │ │ │ │ │
  └─────┬──────┘   └──────┬───────┘   └─────────┬─────────┘
        │ ashare          │ crypto (okx)        │ crypto (binance_vision)
        ▼                 ▼                     ▼
  ┌─────────────────────────────────────────────────────────┐
- │           MarketAdapter 抽象（kairos.data.markets）      │
+│ MarketAdapter abstraction (kairos.data.markets) │
  │  • FetchTask / universe / fetch_ohlcv / MARKET_EXOG_COLS │
  └──────────────────────┬──────────────────────────────────┘
                         │   kairos-collect  (--market)
@@ -99,30 +99,30 @@ model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-small-crypto")
                         │
                         ▼
      ┌──────────────────────────────────────────────┐
-     │ kairos.data.common_features   24 维通用因子  │
-     │ adapter.market_features        8 维市场因子  │
-     │ ──────────────── = EXOG_COLS (固定 32 维) ── │
-     │ kairos.data.prepare_dataset   (含 meta.json) │
+│ kairos.data.common_features 24-dimensional common factor │
+│ adapter.market_features 8-dimensional market factors │
+│ ──────────────── = EXOG_COLS (fixed 32 dimensions) ── │
+│ kairos.data.prepare_dataset (including meta.json) │
      └────────────────────┬─────────────────────────┘
                           │
                           ▼
        finetune/data/<name>/{train,val,test}_data.pkl + exog_*.pkl + meta.json
 ```
 
-### 训练 + 回测 + 部署
+### training + backtest + deployment
 
 ```
  ┌────────────────────────────┐    ┌────────────────────────────┐
  │ kairos.training            │    │ kairos.training            │
- │ .train_tokenizer  (可选)   │    │ .backtest_ic               │
+│ .train_tokenizer (optional) │ │ .backtest_ic │
  │ .train_predictor           │    │  --baseline  vs  --ckpt    │
- │  ├── preset_for(name)      │    │  自动从 meta.json 推       │
+│ ├── preset_for(name) │ │ Automatically push from meta.json │
  │  │    ashare-daily /       │    │  market / freq / exog      │
- │  │    crypto-1min          │    │  输出 overall + by-date +  │
- │  ├── DDP (torchrun)        │    │  by-hour 三档 bucket       │
- │  ├── 渐进解冻 + OneCycleLR │    └──────────────┬─────────────┘
- │  ├── 早停 patience=3       │                   │
- │  └── KAIROS_* env 覆盖参数 │                   ▼
+│ │ crypto-1min │ │ output overall + by-date + │
+│ ├── DDP (torchrun) │ │ by-hour third bucket │
+│ ├── Gradual Thawing + OneCycleLR │ └──────────────┬───────────────┘
+ │  ├── early stopping patience=3       │                   │
+│ └── KAIROS_* env override parameters │ ▼
  └──────────────┬─────────────┘          artifacts/backtest_*.json
                 │
                 ▼
@@ -135,110 +135,110 @@ model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-small-crypto")
  (HF Hub)           (FastAPI /predict)
 ```
 
-### Kairos vs Kronos：数据维度对比
+### Kairos vs Kronos: Comparison of data dimensions
 
-Kairos 的数据入口与 Kronos 原版**完全向后兼容**——只在原有两条通道之外额外多了一条旁路外生变量通道 `EXOG`（默认 32 维）和一个分位回归头，不改动 tokenizer 的 `d_in`。
+The data entry of Kairos is fully backward compatible with the original version of Kronos - only an additional bypass exogenous variable channel `EXOG` (default 32 dimensions) and a quantile regression head are added in addition to the original two channels, without changing the `d_in` of the tokenizer.
 
-| 通道 | Kronos 原版 | Kairos | 融合方式 |
+|aisle|Kronos Original| Kairos |Fusion method|
 |---|---|---|---|
-| **价量**（tokenizer `d_in`） | 6 维：`open, high, low, close, volume, amount` | **6 维（不变）** | → `KronosTokenizer` BSQ 量化为 `(s1_bits, s2_bits)` token |
-| **时间戳**（TemporalEmbedding） | 5 维：`minute, hour, weekday, day, month` | **5 维（不变）** | → 在 transformer 输入端**加**到 token embedding 上 |
-| **外生因子**（ExogenousEncoder） | — | **32 维 `EXOG_COLS`** = 24 通用 + 8 市场专属 | → `Linear→SiLU→Linear→RMSNorm→gate·tanh`，与 token + time embedding **相加**；`gate` **零初始化**，第一步等价 Kronos |
-| **预测头** | next-token CE（s1/s2 双头） | **CE（不变）** + `QuantileReturnHead`（分位回归头，方案 C） | `CE + quantile_weight · pinball` 联合损失 |
+|**Price and Volume** (tokenizer `d_in`)|6D: `open, high, low, close, volume, amount`|**6 dimensions (unchanged)**|→ `KronosTokenizer` BSQ is quantified into `(s1_bits, s2_bits)` token|
+|**Timestamp** (TemporalEmbedding)|5D: `minute, hour, weekday, day, month`|**5 dimensions (unchanged)**|→ Add **to the token embedding at the transformer input|
+|**Exogenous Factor** (ExogenousEncoder)| — |**32 dimensions `EXOG_COLS`** = 24 common + 8 market-specific|→ `Linear→SiLU→Linear→RMSNorm→gate·tanh`, **added** to token + time embedding; `gate` **zero initialization**, the first step is equivalent to Kronos|
+|**Prediction Header**|next-token CE (s1/s2 double header)|**CE (unchanged)** + `QuantileReturnHead` (quantile regression head, plan C)|`CE + quantile_weight · pinball` Joint loss|
 
-### 输入 / 输出长什么样
+### What does input/output look like?
 
-Kairos / Kronos **对外可解码成未来 K 线 bar 的 6 维连续值**，但**模型内部直接输出的不是 6 维实数回归值，而是离散 token 的概率分布**。原因是 `KronosTokenizer` 会先把每根 bar 的 `open, high, low, close, volume, amount` 压成两级 token（`s1`, `s2`），predictor 学的是"下一个 token 是什么"，再把 token 解码回连续 K 线。
+Kairos/Kronos **can be externally decoded into a 6-dimensional continuous value of the future K-line bar**, but **the model internally directly outputs not a 6-dimensional real regression value, but a probability distribution of discrete tokens**. The reason is that `KronosTokenizer` will first compress the `open, high, low, close, volume, amount` of each bar into two-level tokens (`s1`, `s2`). The predictor learns "what is the next token" and then decodes the token back into a continuous K-line.
 
 ```mermaid
 flowchart LR
-    A["输入窗口<br/>过去 T 根 K 线<br/>每根 6 维: OHLCVA"] --> B["KronosTokenizer.encode<br/>把连续值压成离散 token"]
-    A2["时间特征<br/>minute / hour / weekday / day / month"] --> F["Transformer 主干"]
-    A3["外生因子 EXOG<br/>32 维"] --> E["ExogenousEncoder<br/>Linear → SiLU → Linear → gate"]
-    B --> C["s1_ids, s2_ids<br/>两级 token 序列"]
+    A["Input window<br/>Past T K lines<br/>6 dimensions each: OHLCVA"] --> B["KronosTokenizer.encode<br/>Convert continuous values ​​into discrete tokens"]
+    A2["Time characteristics<br/>minute / hour / weekday / day / month"] --> F["Transformer backbone"]
+    A3["Exogenous factors EXOG<br/>32 dimensions"] --> E["ExogenousEncoder<br/>Linear → SiLU → Linear → gate"]
+    B --> C["s1_ids, s2_ids<br/>Two-level token sequence"]
     C --> F
     E --> F
-    F --> G["DualHead<br/>输出 s1_logits / s2_logits"]
-    F --> H["QuantileReturnHead<br/>输出未来收益分位数"]
-    G --> I["采样 / 取 argmax 得到下一个 token"]
-    I --> J["KronosTokenizer.decode<br/>把 token 还原成 6 维 bar"]
-    J --> K["对外结果<br/>未来 bar 的 open/high/low/close/volume/amount"]
-    H --> L["交易信号<br/>例如 h30 的 rank-IC / ICIR"]
+    F --> G["DualHead<br/>Output s1_logits / s2_logits"]
+    F --> H["QuantileReturnHead<br/>Outputs future return quantiles"]
+    G --> I["Sampling/taking argmax to get the next token"]
+    I --> J["KronosTokenizer.decode<br/>Restore token to 6-dimensional bar"]
+    J --> K["External results<br/>open/high/low/close/volume/amount of future bar"]
+    H --> L["Trading signals<br/>e.g. h30’s rank-IC / ICIR"]
 ```
 
-一个 `crypto-1min` 样本在进入模型前，大致可以理解为：
+Before a `crypto-1min` sample enters the model, it can be roughly understood as:
 
-- `x`: `[289, 6]`，其中 `289 = lookback_window 256 + predict_window 32 + 1`
+- `x`: `[289, 6]`, where `289 = lookback_window 256 + predict_window 32 + 1`
 - `stamp`: `[289, 5]`
 - `exog`: `[289, 32]`
 
-训练时 tokenizer 会先把 `x` 编成 `s1_ids` / `s2_ids`，然后真正喂给 predictor 的是移位后的：
+During training, the tokenizer will first compile `x` into `s1_ids` / `s2_ids`, and then what is actually fed to the predictor is the shifted one:
 
-- `s1_in`, `s2_in`: 过去 token 序列
-- `stamp_in`: 对齐的时间特征
-- `exog_in`: 对齐的 32 维外生因子
+- `s1_in`, `s2_in`: past token sequence
+- `stamp_in`: Aligned temporal characteristics
+- `exog_in`: Aligned 32-dimensional exogenous factors
 
-模型的直接输出分两路：
+The direct output of the model is divided into two channels:
 
-- `s1_logits`, `s2_logits`：下一个 token 的概率分布，用来生成 / 解码未来 K 线 bar
-- `quantiles`：未来收益分位数，用来做 `h30` 这类回测信号
+- `s1_logits`, `s2_logits`: The probability distribution of the next token, used to generate/decode future K-line bars
+- `quantiles`: future income quantile, used to make backtest signals such as `h30`
 
-### 为什么要拆成 `s1` 和 `s2`
+### Why split it into `s1` and `s2`
 
-`s1/s2` 不是两次重复预测，而是**分层量化**：
+`s1/s2` It is not repeated prediction twice, but **hierarchical quantification**:
 
-- `s1`：先决定 bar 的**粗结构**，例如大致的价格区间、波动级别、量价形态
-- `s2`：在 `s1` 已经确定后，再补**细节残差**
+- `s1`: First determine the **rough structure** of the bar, such as the approximate price range, volatility level, volume and price pattern
+- `s2`: After `s1` has been determined, add **detailed residuals**
 
-这样做比“一次性预测一个超大 vocab”更容易训练：
+This is easier to train than "predict a very large vocab all at once":
 
-- 先做粗分类，再做细分类，分类空间更小
-- `s2` 明确条件在 `s1` 上，建模难度更低
-- 只用 `s1` 就能得到一个较粗的重构，`s1+s2` 合起来才是完整 bar
+- Do rough classification first, then fine classification, the classification space will be smaller
+- `s2` It is clear that the conditions are on `s1`, and the modeling difficulty is lower
+- Only `s1` can get a thicker reconstruction, `s1+s2` together is the complete bar
 
 ```mermaid
 flowchart LR
-    A["未来一根 bar"] --> B["粗编码 s1<br/>先决定大轮廓"]
-    A --> C["细编码 s2<br/>补充残差和细节"]
-    B --> D["例如<br/>大阳线 / 小阴线 / 窄波动"]
-    C --> E["例如<br/>上影更长一点<br/>close 更靠近 high<br/>volume 更高一点"]
-    B --> F["只用 s1 decode<br/>得到粗重构"]
-    C --> G["s1 + s2 一起 decode<br/>得到完整 6 维 bar"]
+    A["future bar"] --> B["Coarse coding s1<br/>Determine the large outline first"]
+    A --> C["Fine coding s2<br/>Supplementary residuals and details"]
+    B --> D["For example<br/>Big positive line/small negative line/narrow fluctuation"]
+    C --> E["For example<br/>The upper shadow is longer<br/>close is closer to high<br/>volume is higher"]
+    B --> F["Only use s1 decode<br/>to get a rough reconstruction"]
+    C --> G["s1 + s2 decode together<br/>to get the complete 6-dimensional bar"]
 ```
 
-可以把它理解成：
+It can be understood as:
 
-- `s1` 像先回答“这根 bar 大概是哪一类”
-- `s2` 再回答“这一类里面具体是哪一种”
+- `s1` Like first answer "What type of bar is this bar probably?"
+- `s2` Then answer "Which specific type is in this category?"
 
-这样 predictor 不需要一次性在一个极大的离散空间里盲猜，而是先抓主结构，再补细节。
+In this way, the predictor does not need to blindly guess in a huge discrete space at once, but first grasps the main structure and then fills in the details.
 
-32 维 `EXOG_COLS` 的具体构成（代码在 [`kairos/data/common_features.py`](kairos/data/common_features.py) 和 `kairos/data/markets/<name>.py`）：
+The specific composition of 32-dimensional `EXOG_COLS` (codes are in [`kairos/data/common_features.py`](kairos/data/common_features.py) and `kairos/data/markets/<name>.py`):
 
-| 分组 | 维度 | 列名（节选） |
+|Group|Dimensions|Listing (excerpt)|
 |---|---|---|
-| 通用 · 收益率 | 3 | `log_ret_1 / 5 / 20` |
-| 通用 · 动量 | 4 | `rsi_14, macd_hist, roc_5, roc_20` |
-| 通用 · 波动率 | 3 | `atr_14, parkinson_20, vol_std_20` |
-| 通用 · 均线偏离 | 3 | `ma{5,20,60}_dev` |
-| 通用 · 布林 / 量价 | 5 | `boll_z, obv_z, mfi_14, amount_z, vwap_dev` |
-| 通用 · 蜡烛微观结构 | 4 | `amplitude, upper_shadow, lower_shadow, body_ratio` |
-| 通用 · 预留 pad | 2 | `pad_common_0, pad_common_1` |
-| **市场专属**（A 股） | 8 | `turnover, turnover_z, is_quarter_end, days_to_holiday, excess_ret_index, index_ret, pad_ashare_0, pad_ashare_1` |
-| **市场专属**（crypto） | 8 | `funding_rate, funding_rate_z, oi_change, basis, btc_dominance, hour_sin, hour_cos, pad_crypto_0` |
+|common·yield| 3 | `log_ret_1 / 5 / 20` |
+|common · momentum| 4 | `rsi_14, macd_hist, roc_5, roc_20` |
+|common · Volatility| 3 | `atr_14, parkinson_20, vol_std_20` |
+|common · moving average deviation| 3 | `ma{5,20,60}_dev` |
+|common · Bollinger/Volume and Price| 5 | `boll_z, obv_z, mfi_14, amount_z, vwap_dev` |
+|common · Candle microstructure| 4 | `amplitude, upper_shadow, lower_shadow, body_ratio` |
+|common · reserved pad| 2 | `pad_common_0, pad_common_1` |
+| **market-specific**(A-shares) | 8 | `turnover, turnover_z, is_quarter_end, days_to_holiday, excess_ret_index, index_ret, pad_ashare_0, pad_ashare_1` |
+| **market-specific**(crypto) | 8 | `funding_rate, funding_rate_z, oi_change, basis, btc_dominance, hour_sin, hour_cos, pad_crypto_0` |
 
-**为什么能一套 checkpoint 跨市场**
+**Why can one set of checkpoints be used across markets**
 
-- 通用 24 维只依赖 OHLCV，任何市场都算得出来。
-- 每个市场 adapter 都**严格贡献 8 维**市场专属因子——Phase 2 架构硬约束（`build_features` 直接 assert）。
-- 模型侧 `n_exog=32` 对所有市场一致；要替换因子就占 pad slot 或换掉某个 slot，**永远不扩维度**。
-- 结果：同一个 checkpoint 可以在 A 股 / crypto / 未来的外汇黄金上加载运行，权重迁移零成本；加载 Kronos 官方权重时，147 层里能直接 reuse 136 层，只有 `exog_encoder` + `return_head` 需要随机初始化。
+- The common 24 dimension only relies on OHLCV and any market can be calculated.
+- Each market adapter strictly contributes 8 dimensions of market-specific factors - Phase 2 architectural hard constraints (`build_features` direct assert).
+- The model side `n_exog=32` is consistent for all markets; if you want to replace factors, occupy the pad slot or replace a certain slot, and **never expand the dimension**.
+- Result: The same checkpoint can be loaded and run on A-shares / crypto / future foreign exchange gold, with zero cost for weight migration; when loading Kronos official weights, 136 of the 147 layers can be directly reused, and only `exog_encoder` + `return_head` require random initialization.
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick start
 
-### 安装
+### Install
 
 ```bash
 git clone https://github.com/Shadowell/Kairos.git
@@ -246,21 +246,21 @@ cd Kairos
 pip install -e '.[serve,train]'
 ```
 
-要求：Python ≥ 3.10，PyTorch ≥ 2.0。
+Requirements: Python ≥ 3.10, PyTorch ≥ 2.0.
 
-### 1. 采集数据
+### 1. Collect data
 
-Kairos 的数据层通过 `--market` 参数选择市场 adapter（默认 `ashare`）：
+Kairos' data layer selects the market adapter through the `--market` parameter (default `ashare`):
 
 ```bash
-# A 股（默认，原有行为不变）
+# A-shares (default, original behavior unchanged)
 kairos-collect --universe csi300 --freq daily \
     --start 2018-01-01 --adjust qfq --out ./raw/daily
 
-# 指数数据，用于相对收益因子
+# Index data for relative return factors
 kairos-collect --universe 000300 --freq daily --adjust qfq --out ./raw/index
 
-# 加密货币（OKX USDT 永续）—— 需要先装 crypto 额外依赖
+# crypto (OKX USDT perpetual) - need to install crypto additional dependencies first
 pip install -e '.[crypto]'
 kairos-collect --market crypto \
     --universe "BTC/USDT:USDT,ETH/USDT:USDT" \
@@ -268,12 +268,12 @@ kairos-collect --market crypto \
     --out ./raw/crypto/1min --workers 1
 ```
 
-完整加密货币工作流（代理、API key、自定义交易所）见 [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)。
+For the complete crypto workflow (agent, API key, custom exchange), see [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md).
 
-### 2. 生成训练集
+### 2. Generate training set
 
 ```bash
-# A 股（日线，传统 time-split）
+# A-shares (daily, traditional time-split)
 kairos-prepare \
     --raw ./raw/daily \
     --raw-index ./raw/index/000300.parquet \
@@ -282,7 +282,7 @@ kairos-prepare \
     --test  2025-01-01:2026-04-17 \
     --out   ./artifacts/datasets
 
-# crypto 1min（interleave-split，更适合高频）
+# crypto 1min (interleave-split, more suitable for high frequency)
 kairos-prepare --market crypto \
     --raw ./raw/crypto/1min \
     --train 2024-01-01:2025-12-31 \
@@ -292,20 +292,20 @@ kairos-prepare --market crypto \
     --out ./finetune/data/crypto_1min
 ```
 
-### 3. 训练（单卡即可）
+### 3. Training (single card is enough)
 
 ```bash
-# 方法 1：改 preset（推荐）
-export KAIROS_PRESET=crypto-1min        # 或 ashare-daily
+# Method 1: Change preset (recommended)
+export KAIROS_PRESET=crypto-1min        # or share-daily
 export KAIROS_DATASET=./finetune/data/crypto_1min
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 
-# 方法 2：临时用 env 覆盖单个参数（无需改代码）
+# Method 2: Temporarily use env to overwrite a single parameter (no need to change the code)
 KAIROS_BATCH_SIZE=32 KAIROS_LR=5e-6 \
     torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 
-# 可选：先微调 Tokenizer（通常不必，直接用 NeoQuasar 官方版即可；
-# 完整流程和评测脚本见 docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md）
+# Optional: fine-tuning Tokenizer first (usually not necessary, just use the official version of NeoQuasar;
+# For the complete process and evaluation script, see docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md)
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
     --dataset-path ./finetune/data/crypto_1min \
@@ -316,10 +316,10 @@ python -m kairos.training.eval_tokenizer \
     --out artifacts/tokenizer_eval_finetuned.json
 ```
 
-### 4. 回测对比
+### 4. Backtest comparison
 
 ```bash
-# baseline = Kronos 原权重 + 随机初始化的 exog / return head
+# baseline = Kronos original weight + randomly initialized exog / return head
 python -m kairos.training.backtest_ic --baseline --preset crypto-1min \
     --dataset-path ./finetune/data/crypto_1min \
     --horizons 1,5,30 --out artifacts/backtest_baseline.json
@@ -332,25 +332,25 @@ python -m kairos.training.backtest_ic \
     --horizons 1,5,30 --out artifacts/backtest_finetuned.json
 ```
 
-### 5. 推到 Hugging Face
+### 5. Push to Hugging Face
 
 ```bash
-huggingface-cli login   # 或 export HF_TOKEN=...
+huggingface-cli login   # or export HF_TOKEN=...
 
-# 5.1 只推 tokenizer
+# 5.1 Only push tokenizer
 kairos-push-hf \
     --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
     --repo-tokenizer your-user/Kronos-Tokenizer-crypto \
     --market-tag crypto \
     --metrics-file artifacts/tokenizer_eval_summary.md
 
-# 5.2 只推 predictor（复用上游 tokenizer）
+# 5.2 Only push predictor (reuse upstream tokenizer)
 kairos-push-hf \
     --predictor-ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
     --repo-predictor your-user/Kronos-small-ashare \
     --predictor-class ext --market-tag ashare
 
-# 5.3 一次推两个
+# 5.3 Push two at a time
 kairos-push-hf \
     --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
     --predictor-ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
@@ -359,7 +359,7 @@ kairos-push-hf \
     --predictor-class ext --private
 ```
 
-### 6. 起 FastAPI 服务
+### 6. Start FastAPI service
 
 ```bash
 kairos-serve \
@@ -367,7 +367,7 @@ kairos-serve \
     --predictor your-user/Kronos-small-ashare \
     --device cuda:0 --port 8000
 
-# 调用
+# call
 curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{
   "symbol": "600977", "lookback": 400, "pred_len": 20,
   "T": 0.6, "top_p": 0.9, "sample_count": 5
@@ -376,99 +376,99 @@ curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -
 
 ---
 
-## 🧬 三种模型改造方案
+## 🧬 Three model modification options
 
-Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md)。
+Kairos implements **Scheme A + Scheme C** by default, which can be used out of the box. See [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) for details.
 
-| 方案 | 做法 | 成本 | 复用预训练 |
+|plan|practice|cost|Reuse pre-training|
 |---|---|---|---|
-| **A：外生旁路通道** | 32 维因子 `Linear→SiLU→Linear→gate` 加到 token embedding | 低 | ✅ 完全兼容 |
-| **B：Tokenizer 重训** | 扩 `d_in` 为 12~20，重训 Tokenizer 和 Predictor | 高（~¥2-5k） | ❌ |
-| **C：分位回归头** | 末层 hidden 接分位头，用 pinball loss | 低 | ✅ |
+|**A: Exogenous bypass channel**|32-dimensional factor `Linear→SiLU→Linear→gate` added to token embedding|Low|✅ Fully compatible|
+|**B: Tokenizer retraining**|Expand `d_in` to 12~20, retrain Tokenizer and Predictor|High (~¥2-5k)| ❌ |
+| **C: quantile regression head** |The last layer hidden is connected to the bit header and uses pinball loss.|Low| ✅ |
 
 ---
 
-## 🗺️ 当前路线图
+## 🗺️ Current roadmap
 
-研究待办、优先级和验收标准已经从 README 拆到单独文档：
+The research backlog, priorities and acceptance criteria have been split from the README into separate documents:
 
-- [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) — 当前路线图、优先级、验收标准、工时估算
-- [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) — 最近一次失败实验的完整复盘
-- [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) — 跨实验复用的调参与故障排查经验
-- [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) — 指标阅读和回测 sanity check
+- [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) — Current roadmap, priority, acceptance criteria, time estimate
+- [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) — Complete post-mortem of a recent failed experiment
+- [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) — Troubleshooting experience in tuning and reusing across experiments
+- [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) — indicator reading and backtest sanity check
 
-这样 README 只回答“项目是什么、怎么开始、现状如何”，不再承载详细研究计划。
+In this way, the README only answers "what is the project, how did it start, and what is the current situation" and no longer carries a detailed research plan.
 
 ---
 
-## 📚 文档入口
+## 📚 document entrance
 
-完整文档地图见 [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md)。这里保留最常用入口：
+See [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) for the complete document map. Here are the most commonly used entries:
 
-| 文档 | 作用 |
+| document |effect|
 |---|---|
-| [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) | 按任务和角色找文档，解决“我现在该看哪篇” |
-| [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) | 术语、指标、核心概念的统一解释 |
-| [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) | 本地开发 + 远端 GPU 训练的标准流程 |
-| [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) | crypto 数据采集、交易所配置、代理与扩展入口 |
-| [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) | 回测参数怎么选、结果怎么读、哪些指标不能误用 |
-| [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) | 训练调参、常见坑、修复思路和经验总结 |
-| [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) | 当前研究路线图和下一步计划 |
-| [AGENTS.md](AGENTS.md) | 仓库操作规则，主要给 AI coding agent 用 |
+| [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |Find documents by tasks and roles to solve "Which article should I read now?"|
+| [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) |Unified explanation of terms, indicators, and core concepts|
+| [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |Standard process of local development + remote GPU training|
+| [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) |crypto data collection, exchange configuration, proxy and extension entrance|
+| [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) |How to choose backtest parameters, how to read the results, and which indicators cannot be misused|
+| [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) |Training parameter adjustment, common pitfalls, repair ideas and experience summary|
+| [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) |Current research roadmap and next steps|
+| [AGENTS.md](AGENTS.md) |Repository operation rules, mainly used by AI coding agent|
 
 ---
 
-## 📂 项目结构
+## 📂 Project structure
 
 ```
 Kairos/
 ├── README.md / LICENSE / pyproject.toml / requirements.txt
-├── AGENTS.md                         ← AI coding agent 的仓库操作手册
-├── .env.example                      ← 环境变量模板（API key / proxy / HF）
+├── AGENTS.md                         ← AI coding agent repository operation manual
+├── .env.example                      ← Environment variable template (API key/proxy/HF)
 ├── docs/
-│   ├── DOCUMENTATION_INDEX.md                 ← 文档导航：按任务和角色找文档
-│   ├── PROJECT_ROADMAP_AND_NEXT_STEPS.md     ← 当前研究路线图、优先级、验收标准
-│   ├── CONCEPTS_AND_GLOSSARY.md              ← 术语和概念统一说明
-│   ├── TRAINING_TUNING_PLAYBOOK.md           ← 训练调参与故障排查手册
-│   ├── BACKTEST_IC_INTERPRETATION_GUIDE.md   ← IC / Rank-IC / ICIR 的配置与解读指南
-│   ├── AUTODL_REMOTE_TRAINING_GUIDE.md       ← 远端 GPU 训练与回传流程
-│   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md ← crypto 数据源、交易所和网络配置指南
-│   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md         ← BTC+ETH 2 年现货 predictor 实验记录
-│   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md          ← Top100 1 年现货 predictor 实验记录
-│   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md  ← OKX 永续多通道改造方案
-│   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md ← OKX 永续 Top10 30 天实验复盘
-│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md       ← BTC+ETH tokenizer 微调与评测记录
-├── kairos/                           ← Python 包（唯一 import 入口）
-│   ├── __init__.py                   ← 顶层 re-export
+│   ├── DOCUMENTATION_INDEX.md                 ← documents navigation: find documents by tasks and roles
+│   ├── PROJECT_ROADMAP_AND_NEXT_STEPS.md     ← Current research roadmap, priorities, acceptance criteria
+│   ├── CONCEPTS_AND_GLOSSARY.md              ← Unified explanation of terms and concepts
+│   ├── TRAINING_TUNING_PLAYBOOK.md           ← Training Participation Troubleshooting Manual
+│   ├── BACKTEST_IC_INTERPRETATION_GUIDE.md   ← IC/Rank-IC/ICIR configuration and interpretation guide
+│   ├── AUTODL_REMOTE_TRAINING_GUIDE.md       ← Remote GPU training and checkpoint return workflow
+│   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md ← crypto data source, exchange and network configuration guide
+│   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md         ← BTC+ETH 2 years spot predictor run log
+│   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md          ← Top100 1 year spot predictor run log
+│   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md  ← OKX perpetual multi-channel transformation plan
+│   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md ← OKX perpetual Top10 30-day experiment post-mortem
+│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md       ← BTC+ETH tokenizer fine-tuning and evaluation records
+├── kairos/                           ← Python package (only import entry)
+│   ├── __init__.py                   ← Top-level re-export
 │   ├── data/
-│   │   ├── collect.py                ← 多市场 CLI dispatcher (kairos-collect)
-│   │   ├── common_features.py        ← 24 维通用因子
-│   │   ├── crypto_extras.py          ← funding/OI/spot sidecar 加载
-│   │   ├── features.py               ← 组装 common + adapter 专属 = 32 维
-│   │   ├── prepare_dataset.py        ← 生成 train/val/test.pkl + meta.json
-│   │   └── markets/                  ← MarketAdapter 抽象 + ashare / crypto 实现
-│   │       └── crypto_exchanges/     ← ccxt 封装：okx / binance_vision / ...
+│   │   ├── collect.py                ← multi-market CLI dispatcher (kairos-collect)
+│   │   ├── common_features.py        ← 24-dimensional common factor
+│   │   ├── crypto_extras.py          ← funding/OI/spot sidecar loading
+│   │   ├── features.py               ← assembly common + adapter specific = 32 dimensions
+│   │   ├── prepare_dataset.py        ← Generate train/val/test.pkl + meta.json
+│   │   └── markets/                  ← MarketAdapter abstraction + share/crypto implementation
+│   │       └── crypto_exchanges/     ← ccxt package: okx/binance_vision/…
 │   ├── models/
 │   │   └── kronos_ext.py             ← KronosWithExogenous + QuantileReturnHead
 │   ├── training/
 │   │   ├── config.py                 ← TrainConfig + preset_for(name)
-│   │   ├── dataset.py                ← KronosDataset（跨市场通用）
+│   │   ├── dataset.py                ← KronosDataset (common across markets)
 │   │   ├── train_tokenizer.py
-│   │   ├── train_predictor.py        ← 支持 KAIROS_* env 覆盖超参
-│   │   └── backtest_ic.py            ← IC / Rank-IC / ICIR，支持 --baseline
+│   │   ├── train_predictor.py        ← Support KAIROS_* env to override super parameters
+│   │   └── backtest_ic.py            ← IC/Rank-IC/ICIR, supports --baseline
 │   ├── deploy/
 │   │   ├── push_to_hf.py
 │   │   └── serve.py
 │   ├── utils/
-│   │   └── training_utils.py         ← DDP / 种子 / 工具
-│   └── vendor/kronos/                ← 官方 Kronos 模型源码（vendored）
+│   │   └── training_utils.py         ← DDP / Seeds / Tools
+│   └── vendor/kronos/                ← Official Kronos model source code (vendored)
 ├── scripts/
-│   ├── autodl_bootstrap.sh           ← AutoDL 一键初始化（venv + hf mirror + smoke）
-│   ├── package_and_upload.sh         ← 打包 + scp 到 AutoDL
-│   └── smoke_crypto_extras.py        ← crypto extras 离线 smoke test
+│   ├── autodl_bootstrap.sh           ← AutoDL one-command initialization (venv + hf mirror + smoke)
+│   ├── package_and_upload.sh         ← Package + scp to AutoDL
+│   └── smoke_crypto_extras.py        ← crypto extras offline smoke test
 ├── examples/
-│   ├── inference_quickstart.py       ← 推理快速上手
-│   └── crypto_top100_universe.md     ← Top100 冻结名单（2026-04-20 快照）
+│   ├── inference_quickstart.py       ← Reasoning quickly getting started
+│   └── crypto_top100_universe.md     ← Top100 frozen list (2026-04-20 snapshot)
 └── tests/
     ├── test_features.py
     ├── test_ashare_adapter.py
@@ -479,38 +479,38 @@ Kairos/
 
 ---
 
-## 📋 CLI 速查
+## 📋 CLI quick check
 
-| 命令 | 作用 |
+|Order|effect|
 |---|---|
-| `kairos-collect --market {ashare,crypto}` | 多市场 K 线采集（akshare / ccxt） |
-| `kairos-prepare --market {ashare,crypto}` | 生成 train/val/test pkl + `meta.json`，支持 time-split / interleave-split |
-| `kairos-train-tokenizer` | 微调 Tokenizer（可选，通常直接用官方版） |
-| `kairos-train-predictor` | 微调 Predictor（方案 A+C）；读 `KAIROS_PRESET / KAIROS_DATASET / KAIROS_*` env |
-| `python -m kairos.training.backtest_ic` | 回测：`--baseline` vs `--ckpt`，IC / Rank-IC / ICIR |
-| `kairos-push-hf` | 上传 checkpoint 到 HuggingFace Hub |
-| `kairos-serve` | 起 FastAPI 推理服务 |
+| `kairos-collect --market {ashare,crypto}` |multi-market K-line collection (akshare/ccxt)|
+| `kairos-prepare --market {ashare,crypto}` |Generate train/val/test pkl + `meta.json`, support time-split / interleave-split|
+| `kairos-train-tokenizer` |fine-tuning Tokenizer (optional, usually use the official version directly)|
+| `kairos-train-predictor` |fine-tuning Predictor (scheme A+C); read `KAIROS_PRESET / KAIROS_DATASET / KAIROS_*` env|
+| `python -m kairos.training.backtest_ic` | backtest: `--baseline` vs `--ckpt`, IC / Rank-IC / ICIR |
+| `kairos-push-hf` |Upload checkpoint to HuggingFace Hub|
+| `kairos-serve` |Starting from FastAPI inference service|
 
-### 常用 env 变量
+### Commonly used env variables
 
-| 变量 | 默认 | 说明 |
+|variable|default|illustrate|
 |---|---|---|
-| `KAIROS_PRESET` | `ashare-daily` | `preset_for(name)` 里注册的预设名，e.g. `crypto-1min` |
-| `KAIROS_DATASET` | preset 里的路径 | 训练 / 回测数据目录（`kairos-prepare` 的 `--out`） |
-| `KAIROS_BATCH_SIZE` / `KAIROS_LR` / `KAIROS_EPOCHS` / `KAIROS_NUM_WORKERS` | preset 默认 | 不改代码就能扫参；完整列表见 `train_predictor.py` |
-| `KAIROS_SMOKE=1` | — | 本地 CPU smoke test 用，50 step × batch 4 |
-| `HF_ENDPOINT=https://hf-mirror.com` | — | 中国大陆推荐，走 hf-mirror |
+| `KAIROS_PRESET` | `ashare-daily` |The default name registered in `preset_for(name)`, e.g. `crypto-1min`|
+| `KAIROS_DATASET` |path in preset|Training/backtest data directory (`kairos-prepare`’s `--out`)|
+| `KAIROS_BATCH_SIZE` / `KAIROS_LR` / `KAIROS_EPOCHS` / `KAIROS_NUM_WORKERS` |preset default|You can scan parameters without changing the code; see `train_predictor.py` for the complete list|
+| `KAIROS_SMOKE=1` | — |For local CPU smoke test, 50 step × batch 4|
+| `HF_ENDPOINT=https://hf-mirror.com` | — |Recommended in mainland China, use hf-mirror|
 
 ---
 
-## 📜 许可
+## 📜 License
 
-MIT License · 参见 [LICENSE](LICENSE)。
+MIT License · See [LICENSE](LICENSE).
 
-本项目在 `kairos/vendor/kronos/` 下 vendor 了 [Kronos](https://github.com/shiyu-coder/Kronos) 原始模型代码，同为 MIT 协议。
+This project vendors the [Kronos](https://github.com/shiyu-coder/Kronos) original model code under `kairos/vendor/kronos/`, which is also under the MIT license.
 
-## 🙏 致谢
+## 🙏 Thanks
 
-- [Kronos: A Foundation Model for the Language of Financial Markets](https://arxiv.org/abs/2508.02739) — 本项目的模型基础
-- [akshare](https://github.com/akfamily/akshare) — 数据源
-- [Hugging Face](https://huggingface.co/) — 模型托管
+- [Kronos: A Foundation Model for the Language of Financial Markets](https://arxiv.org/abs/2508.02739) — The model basis of this project
+- [akshare](https://github.com/akfamily/akshare) — data source
+- [Hugging Face](https://huggingface.co/) — Model hosting

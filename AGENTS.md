@@ -1,142 +1,142 @@
 # AGENTS.md
 
-> 本文件是 **给 AI coding agent（Cursor / Claude Code / Codex 等）看的仓库操作手册**。  
-> 人类协作者也欢迎读，但首要读者是 agent。请在每次开始一个新任务前先读一遍本文件。
+> This document is the **repository operations manual for AI coding agents** such as Cursor, Claude Code, and Codex.
+> Human collaborators can read it too, but the primary audience is the agent. Read it before starting any new task.
 
 ---
 
-## 0. TL;DR — 最重要的 5 条
+## 0. TL;DR — Top 5
 
-1. **工作目录**：`/Users/jie.feng/wlb/Kairos`，远端 `origin = https://github.com/Shadowell/Kairos.git`，主分支 `main`。
-2. **修改完代码后立即 `git add -A && git commit && git push`**，不需要再次征求用户同意（见 §6）。
-3. **回答统一用中文**（用户规则）。
-4. **文件操作**：读用 Read/Grep/Glob，编辑用 StrReplace/Write，**不要用 `cat/sed/awk/echo >`** 代替。
-5. **重训/长任务**：默认在远端 AutoDL 跑，不要在本地 macOS 上尝试 GPU 训练；详见 `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`。
-
----
-
-## 1. 仓库定位
-
-Kairos 是 [Kronos](https://github.com/shiyu-coder/Kronos) 基础模型的**多市场（A 股 + 加密货币）微调 + 部署工具箱**：
-
-- **数据采集** — `kairos.data.collect`（dispatcher）+ `kairos.data.markets.*`（每个市场一个 adapter，A 股 / 加密 / 将来的外汇黄金）
-- **因子工程** — `kairos.data.common_features`（24 维通用）+ `adapter.market_features`（8 维市场专属）= `EXOG_COLS` 32 维，**无未来信息泄漏**
-- **数据集打包** — `kairos.data.prepare_dataset`（time-split / interleave-split；`--market` 切 adapter；落盘 `meta.json`）
-- **模型** — `kairos.models.KronosWithExogenous`（Kronos + 外生通道 + 分位回归头；`n_exog=32` 对所有市场一致）
-- **训练** — `kairos.training.train_predictor`（DDP + 渐进解冻 + 早停）+ `kairos.training.config.preset_for("crypto-1min")` 等预设
-- **评估** — `kairos.training.backtest_ic`（IC / Rank-IC / ICIR；支持 `--aggregation date/hour/minute/none`，从 `meta.json` 自动推 market/freq）
-- **部署** — `kairos.deploy.push_to_hf` / `kairos.deploy.serve`
-
-完整术语与背景见 `docs/CONCEPTS_AND_GLOSSARY.md`。
+1. **Working directory**: `/Users/jie.feng/wlb/Kairos`, remote `origin = https://github.com/Shadowell/Kairos.git`, main branch `main`.
+2. **`git add -A && git commit && git push`** immediately after modifying the code, there is no need to ask for user consent again (see §6).
+3. **Answers must be in Chinese** (User Rules).
+4. **File operation**: Use Read/Grep/Glob for reading, StrReplace/Write for editing, **Do not use `cat/sed/awk/echo >`** instead.
+5. **Retraining/Long Task**: Run in remote AutoDL by default, do not try GPU training on local macOS; see `docs/AUTODL_REMOTE_TRAINING_GUIDE.md` for details.
 
 ---
 
-## 2. 目录约定
+## 1. Repository Positioning
+
+Kairos is a **multi-market (A-shares + crypto) fine-tuning and deployment toolbox** for the [Kronos](https://github.com/shiyu-coder/Kronos) base model:
+
+- **Data collection** — `kairos.data.collect` (dispatcher) + `kairos.data.markets.*` (one adapter per market, covering A-shares, crypto, and future extensions such as FX or gold)
+- **Feature engineering** — `kairos.data.common_features` (24 common dimensions) + `adapter.market_features` (8 market-specific dimensions) = fixed 32-dimensional `EXOG_COLS`, with **no future-information leakage**
+- **Dataset packaging** — `kairos.data.prepare_dataset` (time-split / interleave-split; `--market` switches adapters; always writes `meta.json`)
+- **Model** — `kairos.models.KronosWithExogenous` (Kronos + exogenous channel + quantile regression head; `n_exog=32` is fixed across markets)
+- **Training** — `kairos.training.train_predictor` (DDP + gradual unfreezing + early stopping) plus presets such as `kairos.training.config.preset_for("crypto-1min")`
+- **Evaluation** — `kairos.training.backtest_ic` (IC / Rank-IC / ICIR; supports `--aggregation date/hour/minute/none`, and recovers market/frequency from `meta.json`)
+- **Deployment** — `kairos.deploy.push_to_hf` / `kairos.deploy.serve`
+
+See `docs/CONCEPTS_AND_GLOSSARY.md` for full terminology and background.
+
+---
+
+## 2. Directory convention
 
 ```
 Kairos/
-├── kairos/                       # 源代码（唯一的 Python 包）
+├── kairos/                       # Source code (only Python package)
 │   ├── data/                     # collect / features / prepare_dataset
-│   │   ├── collect.py            # 多市场 CLI dispatcher (kairos-collect)
-│   │   ├── common_features.py    # 24 维通用因子
-│   │   ├── crypto_extras.py      # funding/OI/spot sidecar 加载
-│   │   ├── features.py           # 组装 common + adapter 专属 = 32 维
-│   │   ├── prepare_dataset.py    # 生成 train/val/test.pkl + meta.json
-│   │   └── markets/              # MarketAdapter 抽象 + ashare / crypto
-│   │       └── crypto_exchanges/ # ccxt 封装：okx / binance_vision / ...
+│   │   ├── collect.py            # multi-market CLI dispatcher (kairos-collect)
+│   │   ├── common_features.py    # 24-dimensional common factor
+│   │   ├── crypto_extras.py      # funding/OI/spot sidecar loading
+│   │   ├── features.py           # assembly common + adapter specific = 32 dimensions
+│   │   ├── prepare_dataset.py    # Generate train/val/test.pkl + meta.json
+│   │   └── markets/              # MarketAdapter abstraction + share/crypto
+│   │       └── crypto_exchanges/ # ccxt package: okx/binance_vision/…
 │   ├── models/                   # KronosWithExogenous + QuantileReturnHead
 │   ├── training/                 # train_tokenizer / train_predictor / eval_tokenizer / backtest_ic / dataset / config
 │   ├── deploy/                   # push_to_hf / serve
-│   ├── utils/                    # training_utils 等
-│   └── vendor/                   # 第三方 vendored 代码（kronos 源码镜像）
-├── docs/                         # 全部文档（按“导航 / 指南 / 实验 / 路线图”分工命名）
-│   ├── DOCUMENTATION_INDEX.md                # 文档导航：按任务和角色找文档
-│   ├── PROJECT_ROADMAP_AND_NEXT_STEPS.md    # 当前路线图、优先级、验收标准
-│   ├── CONCEPTS_AND_GLOSSARY.md             # 术语和核心概念统一解释
-│   ├── TRAINING_TUNING_PLAYBOOK.md          # 调参与故障排查经验
-│   ├── BACKTEST_IC_INTERPRETATION_GUIDE.md  # IC 回测配置和结果解读
-│   ├── AUTODL_REMOTE_TRAINING_GUIDE.md      # 远端 GPU 训练与回传流程
-│   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md # crypto 数据源 / 交易所 / 网络配置
-│   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md        # BTC+ETH 2 年现货 predictor 实验记录
-│   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 1 年现货 predictor 实验记录
-│   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md # OKX 永续多通道改造方案
-│   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md # OKX 永续 Top10 30 天实验复盘
-│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer 微调与评测记录
-├── scripts/                      # 运维 / CI 辅助脚本
-│   ├── autodl_bootstrap.sh       # AutoDL 一键初始化（venv + hf mirror + smoke）
-│   ├── package_and_upload.sh     # 打包 + scp 到 AutoDL
-│   └── smoke_crypto_extras.py    # crypto extras 离线 smoke test
-├── examples/                     # 快速上手示例
+│   ├── utils/                    # training_utils etc.
+│   └── vendor/                   # Third-party vendored code (Kronos source snapshot)
+├── docs/                         # All documents (named according to the division of "navigation/guide/experiment/roadmap")
+│   ├── DOCUMENTATION_INDEX.md                # documents navigation: find documents by tasks and roles
+│   ├── PROJECT_ROADMAP_AND_NEXT_STEPS.md    # Current roadmap, priority, acceptance criteria
+│   ├── CONCEPTS_AND_GLOSSARY.md             # Unified explanation of terminology and core concepts
+│   ├── TRAINING_TUNING_PLAYBOOK.md          # Training tuning and troubleshooting notes
+│   ├── BACKTEST_IC_INTERPRETATION_GUIDE.md  # IC backtest configuration and result interpretation
+│   ├── AUTODL_REMOTE_TRAINING_GUIDE.md      # Remote GPU training and checkpoint return workflow
+│   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md # crypto data source/exchange/network configuration
+│   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md        # BTC+ETH 2 years spot predictor run log
+│   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 1 year spot predictor run log
+│   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md # OKX perpetual multi-channel transformation plan
+│   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md # OKX perpetual Top10 30-day experiment post-mortem
+│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer fine-tuning and evaluation records
+├── scripts/                      # Operations/CI auxiliary script
+│   ├── autodl_bootstrap.sh       # AutoDL one-command initialization (venv + hf mirror + smoke)
+│   ├── package_and_upload.sh     # Package + scp to AutoDL
+│   └── smoke_crypto_extras.py    # crypto extras offline smoke test
+├── examples/                     # Quick getting started example
 │   ├── inference_quickstart.py
-│   └── crypto_top100_universe.md # Top100 冻结名单（2026-04-20 快照）
-├── tests/                        # pytest 测试（5 个 test_*.py）
-├── raw/                          # 原始 parquet（不入库，见 .gitignore）
-├── finetune/data/                # 打包后的 *.pkl（不入库）
-├── artifacts/                    # checkpoint / backtest_report.json（不入库）
-├── pyproject.toml                # 包定义 + CLI 入口
-├── requirements.txt              # 核心依赖镜像（方便 pip install -r）
-├── .env.example                  # 环境变量模板（API key / proxy / HF）
+│   └── crypto_top100_universe.md # Top100 frozen list (2026-04-20 snapshot)
+├── tests/                        # pytest tests (5 test_*.py)
+├── raw/                          # Original parquet (not stored in the library, see .gitignore)
+├── finetune/data/                # Packaged *.pkl (not stored in the library)
+├── artifacts/                    # checkpoint/backtest_report.json (not stored in the database)
+├── pyproject.toml                # Package definition + CLI entry
+├── requirements.txt              # Core dependency snapshot (convenient for `pip install -r`)
+├── .env.example                  # Environment variable template (API key/proxy/HF)
 ├── LICENSE                       # MIT
 ├── README.md
-└── AGENTS.md                     # 本文件
+└── AGENTS.md                     # this document
 ```
 
-**不要往 `raw/` / `finetune/data/` / `artifacts/` / `.venv/` 里 commit 文件。**
+**Do not commit files to `raw/` / `finetune/data/` / `artifacts/` / `.venv/`. **
 
 ---
 
-## 3. 常用命令速查
+## 3. Quick check of commonly used commands
 
-### 环境
+### environment
 ```bash
-# 本地（macOS）——仅做数据采集、打包、smoke test
+# Local (macOS) - only data collection, packaging, smoke test
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-pip install "numpy<2" scipy      # numpy 2.x 与 torch 不兼容
+pip install "numpy<2" scipy      # numpy 2.x is not compatible with torch
 ```
 
-### 数据流水线
+### data pipeline
 ```bash
-# 1a) 采集 — A 股（默认 market=ashare，workers=1，mini_racer 线程不安全）
+# 1a) Collection - A-shares (default market=ashare, workers=1, mini_racer thread is not safe)
 kairos-collect --universe csi300 --freq daily \
   --start 2018-01-01 --end 2026-04-17 --out ./raw/daily --workers 1
 
-# 1b) 采集 — 加密货币（需要先装 crypto extras）
+# 1b) Collection — crypto (crypto extras need to be installed first)
 pip install -e '.[crypto]'
-# 默认 OKX 永续（需要代理或直连 OKX；有 funding/OI/basis）
+# Default OKX perpetual (needs proxy or direct connection to OKX; funding/OI/basis available)
 kairos-collect --market crypto \
   --universe "BTC/USDT:USDT,ETH/USDT:USDT" --freq 1min \
   --start 2023-01-01 --end 2025-01-01 \
   --out ./raw/crypto/1min --workers 1 \
   --proxy "${HTTPS_PROXY:-}"
-# 办公网下的降级通道（Binance 公共镜像，只有现货，没有 funding/OI/basis）
+# Downgrade channel under the office network (Binance public image, only spot, no funding/OI/basis)
 kairos-collect --market crypto --exchange binance_vision \
   --universe "BTC/USDT,ETH/USDT" --freq 1min \
   --start 2024-01-01 --end 2024-02-01 \
   --out ./raw/crypto/bv_1min --workers 1
 
-# 2) 打包（v2 默认 interleave split）
+# 2) Packaging (v2 defaults to interleave split)
 kairos-prepare --raw ./raw/daily --out ./finetune/data/processed_datasets \
   --train 2018-01-01:2023-12-31 --val 2024-01-01:2024-12-31 \
   --test 2025-01-01:2026-04-17 \
   --split-mode interleave --val-ratio 0.15 --block-days 20 --seed 42
 ```
 
-### 训练 / 评估
+### training/evaluation
 ```bash
-# 本地 CPU smoke test（快速验证链路）
+# Local CPU smoke test (quick verification link)
 KAIROS_SMOKE=1 python -m kairos.training.train_predictor
 
-# AutoDL GPU（详见 docs/AUTODL_REMOTE_TRAINING_GUIDE.md）
+# AutoDL GPU (see docs/AUTODL_REMOTE_TRAINING_GUIDE.md for details)
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 
-# 回测 IC（baseline 对比）
+# backtest IC (baseline comparison)
 python -m kairos.training.backtest_ic --baseline --horizons 1,5 \
   --out artifacts/backtest_baseline.json
 python -m kairos.training.backtest_ic --ckpt artifacts/best_model --horizons 1,5 \
   --out artifacts/backtest_finetuned.json
 
-# Tokenizer 单独微调 + 评测（详见 docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md）
+# Tokenizer separate fine-tuning + evaluation (see docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md for details)
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
   --dataset-path ./finetune/data/crypto_1min_btc_eth \
@@ -157,56 +157,56 @@ git add -A && git commit -m "..." && git push
 
 ---
 
-## 4. 代码规范
+## 4. Code specifications
 
-- **Python 3.10+**，遵循现有文件的风格（不强制引入 black/ruff 之前不要顺手 reformat 整个文件）。
-- **不加废话注释**。`# 导入 pandas`、`# 返回结果` 这类直接删。只在表达**意图/权衡/约束**时加注释。
-- **不写 emoji**，除非用户在 README/docs 里主动要求。
-- **类型标注**：新写函数尽量加；改动现有函数时保持风格一致即可，不要为了加 type hint 而大改。
-- **禁止未来信息泄漏**：任何放进 `kairos/data/features.py` 的新因子都必须只用 `t` 时刻及以前的数据；打包阶段的 z-score 窗口固定为 60 天 rolling。
-- **CLI 入口**：新加可执行脚本时，在 `pyproject.toml` 的 `[project.scripts]` 下注册，命名前缀 `kairos-`。
-
----
-
-## 5. 测试与验证
-
-- 改动 `kairos/data/*` → 跑一次 `kairos-prepare --max-symbols 5 --dry-run`（或最小子集）确认没炸。
-- 改动 `kairos/training/*` → 先 `KAIROS_SMOKE=1 python -m kairos.training.train_predictor` 本地 CPU 跑通。
-- 改动 `kairos/models/*` → 至少加载一次 Kronos-small 权重验证 state_dict 对得上。
-- **没有 CI**，agent 自己负责本地验证。有 `pytest` 就跑 `pytest -x`。
+- **Python 3.10+**, follow the style of existing files (don't reformat the entire file without forcing the introduction of black/ruff).
+- **No nonsense comments**. `# import pandas`, `# return results` will be deleted directly. Only comment when expressing intent/tradeoffs/constraints.
+- **Do not write emoji** unless the user actively requests it in README/docs.
+- **Type annotation**: Add new functions as much as possible; when changing existing functions, just keep the style consistent, and don't make major changes just to add type hints.
+- **No future information leakage**: Any new factors put into `kairos/data/features.py` must only use data from `t` time and before; the z-score window in the packaging phase is fixed to 60 days rolling.
+- **CLI Entry**: When adding a new executable script, register it under `[project.scripts]` of `pyproject.toml` and name it with the prefix `kairos-`.
 
 ---
 
-## 6. Git 提交规则（重要）
+## 5. Testing and Verification
 
-### 6.1 触发时机
-**只要完成了一个"逻辑完整的改动"——例如修了一个 bug、加了一个文档、调了一组超参——就立即 commit + push，不需要再问用户。**
+- Change `kairos/data/*` → Run `kairos-prepare --max-symbols 5 --dry-run` (or the smallest subset) to confirm that it is not exploded.
+- Change `kairos/training/*` → Run `KAIROS_SMOKE=1 python -m kairos.training.train_predictor` local CPU first.
+- Change `kairos/models/*` → Load Kronos-small weights at least once to verify that state_dict matches.
+- **No CI**, the agent is responsible for local verification. If there is `pytest`, run `pytest -x`.
 
-例外（这些情况必须先停下问用户）：
-- 需要 `git push --force` / `--force-with-lease` 时；
-- 改到 `main` 以外的分支 / 新建分支 / 合并 PR 时；
-- commit 会包含看起来像**密钥、token、API key、`.env`、`credentials.*`** 的文件时；
-- 用户明确说 "先别推" / "我要看看" 时。
+---
 
-### 6.2 Commit message 风格
-- **英文、祈使句、首字母大写、不加句号**，参考已有历史：
+## 6. Git commit rules (important)
+
+### 6.1 Trigger timing
+**As long as a "logically complete change" is completed - such as fixing a bug, adding a document, adjusting a set of super parameters - commit + push immediately without asking the user. **
+
+Exceptions (in these cases you must stop and ask the user first):
+- When `git push --force` / `--force-with-lease` is required;
+- When changing to a branch other than `main`/creating a new branch/merging PR;
+- When the commit will contain files that look like **key, token, API key, `.env`, `credentials.*`**;
+- When the user explicitly says "Don't push it yet" / "I want to see it".
+
+### 6.2 Commit message style
+- **English, imperative sentence, capitalized, no period**, refer to existing history:
   ```
   Fix repo URLs to Shadowell/Kairos and add package init placeholders
   Harden training loop: data fallbacks, interleave split, early-stop, IC backtest
   Add AutoDL guide and glossary; cross-link from README/playbook
   ```
-- 一行标题 ≤ 72 字符；必要时空一行再写 body。
-- **一个 commit 做一件事**，不要把"修 bug + 重构 + 加文档"塞到一起。
+- One-line title ≤ 72 characters; if necessary, leave a blank line and then write the body.
+- **One commit does one thing**, don't stuff "bug fixes + refactoring + adding documents" together.
 
-### 6.3 标准动作
+### 6.3 Standard actions
 ```bash
-git status                          # 先看一眼
+git status                          # Take a look first
 git add -A
 git commit -m "<imperative subject>"
-git push                            # 推到 origin/main
-git status                          # 确认 clean + "up to date"
+git push                            # Push to origin/main
+git status                          # Confirm clean + "up to date"
 ```
-用 HEREDOC 形式避免转义问题：
+Use the HEREDOC form to avoid escaping problems:
 ```bash
 git commit -m "$(cat <<'EOF'
 Subject line here
@@ -216,97 +216,97 @@ EOF
 )"
 ```
 
-### 6.4 不要做的事
-- ❌ `git commit --amend` 已经 push 过的 commit。
-- ❌ `git push --force` 到 `main`。
-- ❌ `git config` 改全局/仓库配置。
-- ❌ `git rebase -i` / `git add -i`（交互式命令跑不起来）。
-- ❌ 提交 `raw/` / `artifacts/` / `finetune/data/` / `.venv/` / `*.pkl` / `*.parquet` / checkpoint。
-- ❌ 提交任何含密钥的文件：`.env` / `*.secret` / `*.pem` / `*.key` / `secrets/`（`.gitignore` 已拦截，但动手前多看一眼 `git status`）。
+### 6.4 Things not to do
+- ❌ `git commit --amend` The commit that has been pushed.
+- ❌ `git push --force` to `main`.
+- ❌ `git config` Change the global/repository configuration.
+- ❌ `git rebase -i` / `git add -i` (Interactive commands cannot be run).
+- ❌ Submit `raw/` / `artifacts/` / `finetune/data/` / `.venv/` / `*.pkl` / `*.parquet` / checkpoint.
+- ❌ Submit any file containing a key: `.env` / `*.secret` / `*.pem` / `*.key` / `secrets/` (`.gitignore` has been intercepted, but take a second look at `git status` before doing it).
 
-### 6.5 Secrets 约定
-- 所有 API key / token 通过**环境变量**传递，命名形如 `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` / `BINANCE_API_KEY` / `HF_TOKEN`。
-- 开发时把值填进 `.env`（git-ignored），用 `set -a; source .env; set +a` 加载。
-- 公开模板在 `.env.example`（tracked），新增需要的变量时**同时**更新模板。
-- 公共行情数据（K 线 / funding / OI）不需要任何 key，crypto adapter 默认走匿名请求。
+### 6.5 Secrets Agreement
+- All API keys/tokens are passed through **environment variables**, with names in the form `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` / `BINANCE_API_KEY` / `HF_TOKEN`.
+- During development, fill in the value into `.env` (git-ignored) and load it with `set -a; source .env; set +a`.
+- The public template is in `.env.example` (tracked), and the template is updated simultaneously when adding required variables.
+- Public market data (K line / funding / OI) does not require any key, and the crypto adapter uses anonymous requests by default.
 
 ---
 
-## 7. 已知坑与固定处理方式
+## 7. Known pitfalls and fixed processing methods
 
-| 症状 | 根因 | 处理 |
+|symptom|root cause|deal with|
 |---|---|---|
-| `kairos-collect` 卡住无输出 | 东财 API 被限流 | 已有 fallback → tencent → sina；`--workers 1` |
-| `kairos-prepare` 报 `Parquet magic bytes not found` | macOS `._*` 元数据文件 | 打包脚本已 filter `startswith("._")`；传输用 `COPYFILE_DISABLE=1 tar --no-xattrs` |
-| `kairos-prepare` 全被 drop | `amount` 列全 NaN | 已 fallback 为 `close * volume` |
-| `ModuleNotFoundError: kairos` | 没激活 venv 或没 `pip install -e .` | `source .venv/bin/activate && pip install -e .` |
-| AutoDL 卡在 `loading Kronos-Tokenizer-base` | `http_proxy` 和 `HF_ENDPOINT=hf-mirror.com` 冲突 | `unset http_proxy https_proxy`；提前 `huggingface-cli download` 预缓存 |
-| `numpy` 2.x 导致 torch 崩 | 版本冲突 | `pip install "numpy<2"` |
-| DDP 在 CPU 上跑不起来 | 默认 nccl | `training_utils.setup_ddp` 已自动切 gloo |
-| 办公网封了 OKX / Binance 主站 | GFW + 公司白名单 | 用 `--exchange binance_vision` 走 `data-api.binance.vision` 现货镜像，只能拉现货 K 线（没有 funding/OI/basis） |
-| AutoDL 默认走不通 `api.okx.com` / `fapi.binance.com` | DNS 污染 + `/etc/network_turbo` 的 Squid 只白名单 github/hf | 在 AutoDL 上装 mihomo (Clash Meta) + 机场订阅；`flag=meta` 取 YAML；预下载 `Country.mmdb` + `GeoSite.dat` + `geoip.dat` 放到 `-d` 目录；GLOBAL 默认是 `DIRECT`，要用 `PUT /proxies/GLOBAL` 切到具体节点（US 节点实测最快，~1.1s/req）。完整步骤见 `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md` |
-| `--market crypto` 跑出来 `funding_rate` / `oi_change` / `basis` / `btc_dominance` 四列全是 0 | `kairos-collect` 只采 OHLCV，`prepare_dataset` 不传 `extras`，adapter 的 `_align_series` 对缺失 series 就 fillna(0) | 要么接受（当前 BTC/ETH + Top100 现货 run 都是如此），要么走 `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md` 的多通道改造 |
-| 用 `binance_vision` 拉出来的 parquet 时间范围偏移 | `_to_unix_ms` 用 naive local time 转 UTC | 预期行为，对 24/7 crypto 不影响训练；真要精确 UTC 日界就手动传完整 ISO 时间 |
-| 本机 macOS `torchrun --standalone` 长时间卡在一堆 `IPv6 ... gai error: 8` 警告 | macOS 对本机 hostname 解析到 IPv6 失败，`torchrun` 的 rendezvous server 挂在主机名上等超时 | 单卡/本机 smoke 不用 torchrun，直接 `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`；AutoDL/GPU 机仍正常用 torchrun |
-| smoke 时 `OneCycleLR` 抛 `ZeroDivisionError: float division by zero` | `total_steps = epochs * steps_per_epoch` 过小时 `int(pct_start * total_steps)` 退化为 0，阶段边界重合 | `KAIROS_SMOKE=1` 已经把 `n_train_iter` 设到 200、`warmup_pct=0.2`，保证 `total_steps ≥ ~50`；自定义 smoke 时也要守这一下限 |
-| `backtest_ic --per-symbol-limit` 跑完 `by_date_mean.ic` 全是 `NaN` | 每个 symbol 独立等距抽样，抽到的时间戳两两不对齐 → 每个 bucket 只 1 条记录，横截面相关系数算不出来 | smoke 用 `--aggregation none` 看 overall 即可；要在少量 symbol 上验 bucket IC，要么 `--stride 60` 让所有 symbol 用同一套偏移，要么直接 GPU 全量 stride=1 跑 |
-| `ccxt.base.errors.InvalidProxySettings: okx you have multiple conflicting proxy settings(httpProxy,httpsProxy)` | ccxt ≥ 4.5 的 `check_proxy_settings` 不允许同时设 `http_proxy` + `https_proxy`；早期版本的 OKX adapter 两个都塞了 | `kairos/data/markets/crypto_exchanges/okx.py` 现在只设 `https_proxy`（commit `9e33a2f`），OKX 走全 HTTPS；自己写新 adapter 时注意同样只留 https 侧 |
-| `[<sym>] funding fetch failed: 'timestamp'` 或 OI `50030 Illegal time range` | ccxt 的 `since` kwarg 在 OKX funding-history / OI 接口上被服务器忽略 → 返回最新数据被 `[start_ms,end_ms)` 过滤到空 → 后续 `df["timestamp"]` KeyError | adapter 现在改成 `params={"after": cursor}` 翻 funding，`params={"begin":...,"end":...}` 查 OI（commit `05b8595`）；同时 empty frame 保留 `funding_rate`/`open_interest` 列以避免 KeyError |
-| OKX funding / OI 历史窗口短 | OKX API 的硬性保留：funding-rate-history ~90 天；contracts/open-interest-history 只返回**最近 ~8 小时**（100 条 × 5m），`after` 游标在这个端点不生效 | **funding**：训练用过去 90 天内数据是 OK 的；更老窗口要接受空表或换 Coinglass。**OI**：目前只能走实时订阅并自己累积落盘；短窗口 smoke 能通，但 Top100 × 1 年训练的 OI 列会是 0（跟旧 BTC/ETH spot run 一样），文档里要明确标出 |
-| `kairos-prepare --train 2026-04-13:2026-04-13` 打包出来每个 symbol 只有 **1 行** | `_slice` 用 `(datetime >= start) & (datetime <= end)`，`end="2026-04-13"` 解析成 `2026-04-13 00:00:00`，分钟级数据只有 00:00 那一条命中 | 分钟级数据的 `--train/--val/--test` 要传 "下一天" 作 end（`2026-04-13:2026-04-14` 表示覆盖 04-13 一整天），或者传完整 ISO timestamp（注意别出现 3 个冒号，`parse_range` 用 `:` 硬切） |
-| `kairos-prepare --train "2026-04-13 08:00:2026-04-14 08:00"` 报 `too many values to unpack (expected 2)` | `parse_range` 直接 `split(":")`，带 `HH:MM` 的 ISO 时间里冒号太多 | 目前解法是避免在 CLI 里写 ISO 时间，退回到日粒度 `YYYY-MM-DD:YYYY-MM-DD`；更优解是后续把 parse 改成 rsplit 或换分隔符 |
-| 训练 log 显示 `[TRAIN] pool=327610, using 5000/epoch.`，10 epoch 跑完 val_ce 只降 0.006，回测出现负迁移 | 之前 mini run 残留了 `KAIROS_N_TRAIN_ITER=5000`，正式 run 没清掉 → 每 epoch 只随机抽 5000 样本 = pool 的 1.5% | **正式 run 前 `unset KAIROS_N_TRAIN_ITER`** 让它走 default 50000；自检看 `using Y/X` 的比例 ≥ 5%。详见 `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` §8.1 |
-| `backtest_ic --aggregation date` 输出 `n_dates: 3, icir: +1.17`（看着很好但不对劲） | test 区只 3 天 → date bucket 只有 3 个 IC 算 mean/std，ICIR 完全是噪声 | test 区 < 5 天用 `--aggregation none` 看 `overall.spearman`；test 区 ≥ 15 天才看 `by_date_mean`。完整决策树见 `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §2 |
-| `--baseline` 跑出来 h30 ICIR=+0.42，看着 Kronos 原权重就有 alpha | random head + Kronos hidden 在 100 symbols × 78 days 尺度下能凑出虚高 ICIR | **必须** 同时报告 baseline 和 finetuned，看 Δ 而不是绝对值。详见 `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §5 |
-| 训练 ckpt 被覆盖（如新 perp run 覆盖了上次的 spot ckpt） | `train_predictor.py` 默认写 `artifacts/checkpoints/predictor/checkpoints/best_model/`，不带 run name | 跑新 run 之前先 `cp -r best_model best_model_<run-name>_backup`；下次最好把 best_model 写法改成 hash/timestamp 子目录 |
+|`kairos-collect` stuck with no output|Dongcai API is restricted|Existing fallback → tencent → sina; `--workers 1`|
+|`kairos-prepare` reported `Parquet magic bytes not found`|macOS `._*` metadata file|The packaging script has been filtered `startswith("._")`; used for transmission `COPYFILE_DISABLE=1 tar --no-xattrs`|
+|`kairos-prepare` were all dropped|`amount` List all NaN|Fallbacked to `close * volume`|
+| `ModuleNotFoundError: kairos` |venv is not activated or not `pip install -e .`| `source .venv/bin/activate && pip install -e .` |
+|AutoDL stuck at `loading Kronos-Tokenizer-base`|`http_proxy` and `HF_ENDPOINT=hf-mirror.com` conflict|`unset http_proxy https_proxy`; Pre-cache `huggingface-cli download` in advance|
+|`numpy` 2.x causes torch to crash|version conflict| `pip install "numpy<2"` |
+|DDP cannot run on CPU|default nccl|`training_utils.setup_ddp` Automatically cut gloo|
+|The office network blocked OKX/Binance main site|GFW + Company Whitelist|Use `--exchange binance_vision` to go to the `data-api.binance.vision` spot mirror, which can only pull the spot K line (no funding/OI/basis)|
+|AutoDL is blocked by default `api.okx.com` / `fapi.binance.com`|DNS Pollution + Squid only whitelist github/hf for `/etc/network_turbo`|Install mihomo (Clash Meta) + airport subscription on AutoDL; get YAML from `flag=meta`; pre-download `Country.mmdb` + `GeoSite.dat` + `geoip.dat` and put it in the `-d` directory; the default GLOBAL is `DIRECT`, you need to use `PUT /proxies/GLOBAL` to switch to the specific node (the US node is the fastest measured, ~1.1s/req). See `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md` for complete steps|
+|`--market crypto` ran out `funding_rate` / `oi_change` / `basis` / `btc_dominance` All four columns are 0|`kairos-collect` only uses OHLCV, `prepare_dataset` does not pass `extras`, adapter’s `_align_series` fillna(0) for missing series|Either accept it (this is currently the case for BTC/ETH + Top100 spot runs), or go for `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`’s multi-channel transformation|
+|The parquet time range offset pulled out by `binance_vision`|`_to_unix_ms` Use naive local time to convert to UTC|Expected behavior, does not affect training for 24/7 crypto; if you really want accurate UTC date boundary, just manually transfer the complete ISO time|
+|The native macOS `torchrun --standalone` is stuck in a pile of `IPv6 ... gai error: 8` warnings for a long time|macOS fails to resolve the local hostname to IPv6, and the rendezvous server of `torchrun` hangs on the hostname and times out.|Single card/native machine does not use torchrun for smoke, just `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`; AutoDL/GPU machine still uses torchrun normally.|
+|When smoke `OneCycleLR` throws `ZeroDivisionError: float division by zero`|`total_steps = epochs * steps_per_epoch` If it is too small, `int(pct_start * total_steps)` degenerates to 0 and the phase boundaries coincide.|`KAIROS_SMOKE=1` has set `n_train_iter` to 200 and `warmup_pct=0.2` to ensure `total_steps ≥ ~50`; this lower limit must also be observed when customizing smoke|
+|`backtest_ic --per-symbol-limit` After running `by_date_mean.ic` all are `NaN`|Each symbol is independently and equidistantly sampled, and the timestamps extracted are not aligned → there is only 1 record in each bucket, and the cross-sectional correlation coefficient cannot be calculated.|Smoke can use `--aggregation none` to see the overall; to check the bucket IC on a small number of symbols, either `--stride 60` let all symbols use the same set of offsets, or directly run the GPU with full stride=1|
+| `ccxt.base.errors.InvalidProxySettings: okx you have multiple conflicting proxy settings(httpProxy,httpsProxy)` |`check_proxy_settings` with ccxt ≥ 4.5 is not allowed to set `http_proxy` + `https_proxy` at the same time; earlier versions of OKX adapter have both blocked|`kairos/data/markets/crypto_exchanges/okx.py` Now only set up `https_proxy` (commit `9e33a2f`), OKX uses all HTTPS; when writing a new adapter, be careful to only leave the https side.|
+|`[<sym>] funding fetch failed: 'timestamp'` or OI `50030 Illegal time range`|The `since` kwarg of ccxt is ignored by the server on the OKX funding-history / OI interface → the latest data returned is filtered to empty by `[start_ms,end_ms)` → subsequent `df["timestamp"]` KeyError|adapter is now changed to `params={"after": cursor}` to check funding, `params={"begin":...,"end":...}` to check OI (commit `05b8595`); at the same time, empty frame retains `funding_rate`/`open_interest` columns to avoid KeyError|
+|OKX funding / OI short historical window|Hard retention of OKX API: funding-rate-history ~90 days; contracts/open-interest-history only returns the latest ~8 hours** (100 items × 5m), `after` cursor does not take effect on this endpoint|**funding**: The data within the past 90 days is OK for training; for older windows, empty tables must be accepted or Coinglass must be used. **OI**: Currently you can only subscribe in real time and accumulate orders yourself; short window smoke can be used, but the OI column of Top100 × 1 year training will be 0 (the same as the old BTC/ETH spot run), which must be clearly marked in the document|
+|`kairos-prepare --train 2026-04-13:2026-04-13` Each symbol is packaged into only **1 line**|`_slice` uses `(datetime >= start) & (datetime <= end)`, `end="2026-04-13"` is parsed into `2026-04-13 00:00:00`, and the minute-level data only has one hit at 00:00|For minute-level data `--train/--val/--test`, you need to pass "next day" as end (`2026-04-13:2026-04-14` means covering the whole day from 04-13), or pass the complete ISO timestamp (be careful not to have 3 colons, `parse_range` use `:` to hard cut)|
+|`kairos-prepare --train "2026-04-13 08:00:2026-04-14 08:00"` reported `too many values to unpack (expected 2)`|`parse_range` Directly `split(":")`, the ISO time with `HH:MM` has too many colons|The current solution is to avoid writing ISO time in the CLI and return to the daily granularity `YYYY-MM-DD:YYYY-MM-DD`; a better solution is to subsequently change parse to rsplit or change the separator|
+|The training log shows `[TRAIN] pool=327610, using 5000/epoch.`, val_ce only dropped by 0.006 after 10 epochs, and negative migration occurred in backtest|`KAIROS_N_TRAIN_ITER=5000` was left in the previous mini run, but was not cleared in the official run → Only 5000 samples are randomly selected per epoch = 1.5% of the pool|**Before officially running `unset KAIROS_N_TRAIN_ITER`** let it run default 50000; self-check to see if the proportion of `using Y/X` is ≥ 5%. See `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` §8.1 for details|
+|`backtest_ic --aggregation date` Output `n_dates: 3, icir: +1.17` (looks good but something is wrong)|The test area only has 3 days → the date bucket has only 3 ICs to calculate mean/std, and the ICIR is completely noise|If the test area is < 5 days, use `--aggregation none` to view `overall.spearman`; if the test area is ≥ 15 days, use `by_date_mean`. For the complete decision tree, see `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §2|
+|`--baseline` ran out h30 ICIR=+0.42, looking at the original weight of Kronos, there is alpha|Random head + Kronos hidden can produce an artificially high ICIR under the scale of 100 symbols × 78 days|**MUST** report both baseline and finetuned, looking at Δ rather than absolute values. See `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §5 for details|
+|The training ckpt is overwritten (such as the new perp run overwriting the last spot ckpt)|`train_predictor.py` defaults to `artifacts/checkpoints/predictor/checkpoints/best_model/` without run name|`cp -r best_model best_model_<run-name>_backup` before running a new run; next time it is best to change the best_model writing method to the hash/timestamp subdirectory|
 
-更多见 `docs/AUTODL_REMOTE_TRAINING_GUIDE.md` 的 "常见坑" 一节，以及 `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` 的完整 post-mortem。
+See `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`'s "Common Pitfalls" section for more, and `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`'s complete post-mortem.
 
 ---
 
-## 8. 训练 / 回测当前基线
+## 8. Training/backtest current baseline
 
-### A 股日线（ashare-daily）
+### A-shares daily line (ashare-daily)
 
-- **v1**（time-split，2024 全年验证）→ 过拟合，test IC 为负。
-- **v2**（interleave-split + 降低 lr + 加大 quantile_weight + 早停）→ val_ce 改善，但 test IC 仍为负。
-- 结论：监督信号与 A 股未来收益相关性弱；下一步方向写在 `docs/TRAINING_TUNING_PLAYBOOK.md`。
+- **v1** (time-split, verified throughout 2024) → overfitting, test IC is negative.
+- **v2** (interleave-split + lower lr + increase quantile_weight + early stop) → val_ce improved, but test IC is still negative.
+- Conclusion: The correlation between supervision signals and A-shares’ future earnings is weak; the next step is written in `docs/TRAINING_TUNING_PLAYBOOK.md`.
 
-### 加密货币 1min（crypto-1min）
+### crypto 1min(crypto-1min)
 
-| run | universe | h30 rank-IC (finetuned) | h30 ICIR | 详情 |
+| run | universe | h30 rank-IC (finetuned) | h30 ICIR |Details|
 |---|---|---|---|---|
-| BTC+ETH 2y spot | 2 币 × 2 年 | **+0.050** | **+0.325** | `docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` |
-| Top100 1y spot | 100 币 × 1 年 | +0.030 | **+0.454** | `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md` |
-| Top10 30d perp ⚠️ | 10 币 × 30 天 | +0.016 (n=3 噪声) | +0.06 | `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`（负迁移 post-mortem）|
+| BTC+ETH 2y spot |2 coins × 2 years| **+0.050** | **+0.325** | `docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` |
+| Top100 1y spot |100 coins × 1 year| +0.030 | **+0.454** | `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md` |
+| Top10 30d perp ⚠️ |10 coins × 30 days|+0.016 (n=3 noise)| +0.06 |`docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` (negative migration post-mortem)|
 
-h30 是当前唯一有效的 horizon（preset `return_horizon=30` 对齐），h1/h5 因训练 target 量纲设计未被真正监督，IC 接近 0 或反向。改进方向见 `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §4 和 `docs/TRAINING_TUNING_PLAYBOOK.md` §8.2。
+h30 is currently the only valid horizon (preset `return_horizon=30` aligned), h1/h5 is not really supervised due to the training target dimension design, and the IC is close to 0 or reverse. For improvement directions, see `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §4 and `docs/TRAINING_TUNING_PLAYBOOK.md` §8.2.
 
-### BSQ Tokenizer（crypto-1min, Kairos-base-crypto）
+### BSQ Tokenizer(crypto-1min, Kairos-base-crypto)
 
-当前仅完成代码 + 本地 CPU smoke（50 步 / M1 CPU / 17 s）——`recon_mse_full` 由 baseline 的 0.00557 降到 0.00518（-7%），证明链路工作。**正式 run 要在 AutoDL 上跑，完整步骤见 `docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md`**。
-Tokenizer 训练 ≈ 4M 参数、batch=50、epochs=15 + patience=3、lr=2e-4 全量解冻，预计 5090 上 5–10 min 完成。
+Currently only completed code + local CPU smoke (50 steps / M1 CPU / 17 s) - `recon_mse_full` dropped from 0.00557 of baseline to 0.00518 (-7%), proving that the link is working. **Official run must be run on AutoDL, see `docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md`** for complete steps.
+Tokenizer training ≈ 4M parameters, batch=50, epochs=15 + patience=3, lr=2e-4, fully unfrozen, expected to be completed in 5–10 minutes on 5090.
 
-改超参时统一改 `kairos/training/config.py` 的 `TrainConfig`，不要把数字硬编码进 `train_predictor.py`。跨市场的参数组合走 `preset_for(name)`——新建市场/频率时**同步**在 `_PRESETS` 里加一条，而不是让调用方自己拼 dict。
+When changing super parameters, always change `kairos/training/config.py` to `TrainConfig`. Do not hard-code numbers into `train_predictor.py`. The cross-market parameter combination is `preset_for(name)` - when creating a new market/frequency, add a **synchronization** to `_PRESETS` instead of letting the caller spell the dict by himself.
 
-### 架构不变式（Phase 2）
+### Architectural Invariants (Phase 2)
 
-1. `len(COMMON_EXOG_COLS) + len(adapter.MARKET_EXOG_COLS) == 32`——加新 adapter 必须保持这一点，`build_features` 会直接 assert 抛错。
-2. 模型侧的 `n_exog` 固定 32，不要跟随 adapter 动；要加新因子就占 pad 或换掉某个 slot，不要扩维度。
-3. 新 adapter 必须能在**不加 `[crypto]` 这类可选依赖**的环境里 import 失败后被 `kairos/data/markets/__init__.py` 里的 `try/except ImportError` 吞掉，不能把 A 股主路径搞崩。
-4. `kairos-prepare` 产出的目录里必须有 `meta.json`，否则下游 `backtest_ic --dataset-path ...` 无法恢复 market/freq。
-
----
-
-## 9. 文档维护
-
-- README 是对外门面，改动要精炼；细节写进 `docs/`。
-- 新增 `docs/*.md` 时，在 `docs/DOCUMENTATION_INDEX.md`、README 的文档入口区和 `AGENTS.md` §2 都加一行链接。
-- 术语先查 `docs/CONCEPTS_AND_GLOSSARY.md`，缺了就补；不要在多个文档里重复定义同一个术语。
+1. `len(COMMON_EXOG_COLS) + len(adapter.MARKET_EXOG_COLS) == 32`——This must be maintained when adding a new adapter, `build_features` will directly assert and throw an error.
+2. `n_exog` on the model side is fixed at 32, and does not follow the adapter. If you want to add new factors, occupy pad or replace a certain slot, and do not expand the dimension.
+3. The new adapter must be able to be swallowed by `try/except ImportError` in `kairos/data/markets/__init__.py` after the import fails in an environment where optional dependencies such as `[crypto]` are not added, and the A-shares main path cannot be destroyed.
+4. `kairos-prepare` The output directory must contain `meta.json`, otherwise the downstream `backtest_ic --dataset-path ...` cannot restore market/freq.
 
 ---
 
-## 10. 本文件本身的维护
+## 9. document maintenance
 
-- 用户在对话里给出的**长期约定**（比如本文件第 6.1 条就是从用户的 "每次修改之后 commit + push" 提炼的）应该沉淀到这里。
-- 改 `AGENTS.md` 本身也适用第 6 节规则：改完立刻 commit + push。
+- README is the external facade, changes should be refined; details should be written in `docs/`.
+- When adding `docs/*.md`, add a line of links to `docs/DOCUMENTATION_INDEX.md`, the document entry area of ​​README and `AGENTS.md` §2.
+- Check `docs/CONCEPTS_AND_GLOSSARY.md` for terms first, and fill in any missing terms; do not define the same term repeatedly in multiple documents.
+
+---
+
+## 10. Maintenance of this document itself
+
+- The **long-term agreement** given by the user in the conversation (for example, Article 6.1 of this document is extracted from the user's "commit + push after each modification") should be settled here.
+- Changing `AGENTS.md` itself also applies to the rules in Section 6: commit + push immediately after making changes.

@@ -1,57 +1,57 @@
-# Crypto BTC/ETH Tokenizer 微调与评测记录
+# Crypto BTC/ETH Tokenizer fine-tuning and evaluation records
 
-> 参考之前跑 [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto)
-> （predictor 微调）的完整流程，这次**把同一套 BTC/USDT + ETH/USDT 2 年 1min
-> 数据**拿来微调 `NeoQuasar/Kronos-Tokenizer-base`（BSQ tokenizer），评测重构误差，
-> 再推到 `Shadowell/Kairos-base-crypto`。
+> Reference before running [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto)
+> (Predictor fine-tuning) complete process, this time** put the same set of BTC/USDT + ETH/USDT 2 years 1min
+> The data** is used for fine-tuning `NeoQuasar/Kronos-Tokenizer-base` (BSQ tokenizer) to evaluate the reconstruction error.
+> Then push it to `Shadowell/Kairos-base-crypto`.
 >
-> 相关文档：
-> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 通用租卡训练手册
-> - [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) — 同一批数据的 predictor run，复用那里的 §1–§4 环境 + 采集 + 打包步骤
-> - [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) — 调参手册
+> Related documents:
+> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL common card rental training manual
+> - [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) — Predictor run of the same batch of data, reusing the §1–§4 environment + collection + packaging steps there
+> - [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) — Parameter Manual
 
 ---
 
-## 0. 为什么单独微调 tokenizer
+## 0. Why fine-tuning tokenizer alone
 
-之前 `Shadowell/Kairos-small-crypto` 只动了 Kronos-small (predictor) 的最后 1 层 + exog/return head，
-**tokenizer 还在用 `NeoQuasar/Kronos-Tokenizer-base` 的官方权重**，它是在 A 股 / 美股日线上训练的，
-对 BTC/USDT 1min 这种高频、波动更剧烈的 bar 分布**不是最优的**：
+Before `Shadowell/Kairos-small-crypto` only moved the last layer of Kronos-small (predictor) + exog/return head,
+**tokenizer is still using `NeoQuasar/Kronos-Tokenizer-base`’s official weight**, which is trained on A-shares / US stock daily online,
+The bar distribution of BTC/USDT 1min, which is high-frequency and fluctuates more violently, is not optimal:
 
-| 症状 | 说明 |
+|symptom|illustrate|
 |---|---|
-| Codebook 利用率低 | 1024-vocab 的 s1/s2 码本，实际只用到 200 多个 (~23%)；剩下的 slot 空转 |
-| 重构 MSE 不小 | 本地 smoke 上 baseline 的 `recon_mse_full ≈ 0.0056`，per-channel MAE ~5.5%；意味着 predictor 从开始就在做有损压缩的 token 上学 |
-| 下游 IC 天花板被压 | tokenizer 漏掉的信号 predictor 再也学不回来 |
+|Codebook utilization is low|Only more than 200 (~23%) of the s1/s2 codebooks of 1024-vocab are actually used; the remaining slots are idle|
+|Refactoring MSE is not small|The `recon_mse_full ≈ 0.0056` of baseline on local smoke, per-channel MAE ~5.5%; means that the predictor has been doing lossy compression token school from the beginning|
+|The downstream IC ceiling is pressed|Signals missed by the tokenizer can never be learned by the predictor|
 
-Fine-tune 一遍 BSQ tokenizer 有望：
-1. **重构 MSE 降 30–60%**（整个模型都在训，而且只训 4M 参数，拟合很轻）；
-2. **codebook 利用率起来**（crypto 的 bar 分布比 A 股日线宽）；
-3. **下游 predictor 的 IC 天花板抬一截**（只在我们后续把新 tokenizer + Kronos-small 一起重训 predictor 时才会体现；当前 Kairos-small-crypto 是**配旧 tokenizer** 微调的）。
+Fine-tune one pass of the BSQ tokenizer is expected to:
+1. **Reconstruction MSE dropped by 30–60%** (the entire model is being trained, and only 4M parameters are trained, so the fitting is very light);
+2. **codebook utilization is up** (crypto’s bar distribution is wider than A-shares daily line);
+3. **The IC ceiling of the downstream predictor has been raised** (this will only be reflected when we subsequently retrain the predictor with the new tokenizer + Kronos-small; currently Kairos-small-crypto is **equipped with the old tokenizer** fine-tuning).
 
 ---
 
-## 1. 前置：数据和环境
+## 1. Prerequisite: data and environment
 
-如果你已经按 [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) §1–§4 跑完一次（本地采 BTC+ETH 2y 1min
-parquet，或者已经打包好 `finetune/data/crypto_1min_btc_eth/`），**直接跳到 §3**。
+If you have already completed one run by pressing [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) §1–§4 (local purchase BTC+ETH 2y 1min
+parquet, or already packaged `finetune/data/crypto_1min_btc_eth/`), **jump directly to §3**.
 
-否则按那份文档的 TL;DR：
+Otherwise, follow the TL;DR of that document:
 
 ```bash
-# 在 AutoDL 上
+# On AutoDL
 cd /root/autodl-tmp/Kairos && source .venv/bin/activate
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME=/root/autodl-tmp/hf_cache
 
-# 采集（Binance Vision 直连，~11 min）
+# Collection (Binance Vision direct connection, ~11 min)
 kairos-collect --market crypto --exchange binance_vision \
     --universe "BTC/USDT,ETH/USDT" --freq 1min \
     --start 2024-01-01 --end 2026-04-17 \
     --out ./raw/crypto/bv_1min_btc_eth --workers 1
 
-# 打包（~10 s）
+# Pack (~10 s)
 kairos-prepare --market crypto \
     --raw ./raw/crypto/bv_1min_btc_eth \
     --train 2024-01-01:2025-12-31 \
@@ -63,16 +63,16 @@ kairos-prepare --market crypto \
 
 ---
 
-## 2. 本地 CPU Smoke（可选但推荐）
+## 2. Local CPU Smoke (optional but recommended)
 
-开长跑前最好本地先把链路跑一遍。macOS 本机不需要 CUDA；只要能加载 Kronos-Tokenizer-base 权重即可。
+It is best to run the link locally before starting a long run. CUDA is not required natively on macOS; only the Kronos-Tokenizer-base weights can be loaded.
 
-### 2.1 准备 30 天 smoke 数据
+### 2.1 Prepare 30 days of smoke data
 
 ```bash
 cd /Users/jie.feng/wlb/Kairos && source .venv/bin/activate
 
-# 如果只有 2y 数据，先拉一份 1mo 的 mini 集
+# If you only have 2y data, first pull a 1mo mini set
 kairos-collect --market crypto --exchange binance_vision \
     --universe "BTC/USDT,ETH/USDT" --freq 1min \
     --start 2026-03-17 --end 2026-04-17 \
@@ -87,10 +87,10 @@ kairos-prepare --market crypto \
     --out ./finetune/data/smoke_crypto_tokenizer
 ```
 
-### 2.2 跑 50 步 smoke 训练
+### 2.2 Run 50 steps smoke training
 
-注意 macOS 下不要用 `torchrun --standalone`，会在 `IPv6 gai error` 卡住
-（AGENTS.md §7）。手动设 DDP env var：
+Note: do not use `torchrun --standalone` under macOS, it will get stuck at `IPv6 gai error`
+(AGENTS.md §7). Manually set DDP env var:
 
 ```bash
 MASTER_ADDR=127.0.0.1 MASTER_PORT=29517 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
@@ -99,7 +99,7 @@ MASTER_ADDR=127.0.0.1 MASTER_PORT=29517 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
     python -m kairos.training.train_tokenizer
 ```
 
-预期输出（RTX 5090 约 6 s，M1 CPU 约 17 s）：
+Expected output (~6 s for RTX 5090, ~17 s for M1 CPU):
 
 ```
 [DDP Setup] Global Rank: 0/1, CPU mode (no CUDA detected)
@@ -113,10 +113,10 @@ Tokenizer size: 4.0M
 [save] best → artifacts/checkpoints/tokenizer/checkpoints/best_model (val_recon=0.005329)
 ```
 
-> `loss` 是 `(recon + bsq_loss) / 2`；`bsq_loss` 带熵正则项，**在训练良好时常为负**。
-> 判断收敛只看 `val_recon`。
+> `loss` is `(recon + bsq_loss) / 2`; `bsq_loss` has an entropy regular term, which is often negative when the training is good.
+> To judge convergence, only look at `val_recon`.
 
-### 2.3 Smoke 评测
+### 2.3 Smoke Review
 
 ```bash
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
@@ -132,30 +132,30 @@ python -m kairos.training.eval_tokenizer \
     --out artifacts/tokenizer_eval_finetuned_smoke.json
 ```
 
-Smoke 结果示例（2026-04-21 本地 M1，**50 步训练**，不是正式结果）：
+Smoke result example (2026-04-21 local M1, **50 step training**, not official result):
 
-| 指标 | baseline | finetuned (smoke) | Δ |
+|index| baseline | finetuned (smoke) | Δ |
 |---|---|---|---|
 | recon_mse_full | 0.005565 | 0.005178 | **-7.0%** |
 | recon_mae_full | 0.05498 | 0.05318 | -3.3% |
 | s1 codebook util | 23.6% | 23.6% | 0% |
 | s2 codebook util | 10.4% | 10.3% | 0% |
 
-只 50 步、40 个 val 窗口，就能看到 MSE 开始降；长跑能到多少 §5 有答案。
+With only 50 steps and 40 val windows, you can see that the MSE begins to decrease; how far can you reach in long-distance running? §5 has the answer.
 
-### 2.4 Smoke 清理
+### 2.4 Smoke Cleanup
 
 ```bash
 rm -rf finetune/data/smoke_crypto_tokenizer artifacts/checkpoints/tokenizer
 ```
 
-正式训练前一定要清掉 smoke 的 ckpt，否则 `best_model` 会被混用。
+Be sure to clear smoke's ckpt before formal training, otherwise `best_model` will be mixed.
 
 ---
 
-## 3. AutoDL 正式训练
+## 3. AutoDL formal training
 
-### 3.1 启动脚本
+### 3.1 Startup script
 
 ```bash
 cd /root/autodl-tmp/Kairos && source .venv/bin/activate
@@ -174,8 +174,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export KAIROS_PRESET=crypto-1min
 export KAIROS_DATASET=/root/autodl-tmp/Kairos/finetune/data/crypto_1min_btc_eth
-export KAIROS_NUM_WORKERS=0      # 防 DataLoader 内存线性爆炸（AGENTS.md §7）
-# 可选：显存紧张就开小 batch
+export KAIROS_NUM_WORKERS=0      # Prevent DataLoader memory linear explosion (AGENTS.md §7)
+# Optional: If the video memory is tight, run a small batch
 # export KAIROS_BATCH_SIZE=32
 
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
@@ -187,43 +187,43 @@ echo $! > logs/train_tokenizer.pid
 tail -f logs/train_tokenizer.log
 ```
 
-### 3.2 配置说明
+### 3.2 Configuration instructions
 
-| 项 | 值（来自 `preset_for("crypto-1min")`） | 说明 |
+|item|value (from `preset_for("crypto-1min")`)|illustrate|
 |---|---|---|
-| `lookback_window` | 256 min | Tokenizer 一次压缩的窗口大小 |
-| `predict_window` | 32 min | Tokenizer 这里不用，但 dataset 一并取了 `lookback + predict + 1` 行 |
-| `batch_size` | 50 | 5090 32GB 够用；4090 24GB 可降到 32 |
-| `tokenizer_learning_rate` | 2e-4 | 不同于 predictor 的 5e-6：整个模型都在训，不做冻结 |
-| `epochs` | 15 | 最大轮数 |
-| `patience` | 3 | 连续 3 epoch val_recon 无改善就早停 |
-| `n_train_iter` | 50000 | 每 epoch 取 5 万样本（= 1000 step × batch 50） |
-| `warmup_pct` | 0.1 | OneCycleLR 热身比例（predictor 用 0.03，tokenizer 略大） |
-| `accumulation_steps` | 1 | tokenizer 轻量，不需要 accumulate |
+| `lookback_window` | 256 min |Tokenizer window size for one compression|
+| `predict_window` | 32 min |Tokenizer is not used here, but dataset also takes the `lookback + predict + 1` line|
+| `batch_size` | 50 |5090 32GB is enough; 4090 24GB can be reduced to 32|
+| `tokenizer_learning_rate` | 2e-4 |Different from predictor 5e-6: the entire model is being trained and no freezing is done.|
+| `epochs` | 15 |Maximum number of rounds|
+| `patience` | 3 |Stop early if there is no improvement after 3 consecutive epoch val_recon|
+| `n_train_iter` | 50000 |Take 50,000 samples every epoch (= 1000 step × batch 50)|
+| `warmup_pct` | 0.1 |OneCycleLR warm-up ratio (predictor uses 0.03, tokenizer is slightly larger)|
+| `accumulation_steps` | 1 |tokenizer is lightweight and does not require accumulation|
 
-### 3.3 训练曲线预期
+### 3.3 Training curve expectations
 
-| epoch | 预计 val_recon (full)† | 说明 |
+| epoch |expected val_recon (full)†|illustrate|
 |---|---|---|
-| baseline (ep 0) | 0.0055 左右 | 仅加载 Kronos-Tokenizer-base 权重跑 val；smoke 实测 |
-| ep 1 | 0.003 — 0.004 | 第 1 个 epoch 大幅下降 |
-| ep 3-5 | 0.0020 — 0.0030 | 最佳 checkpoint 多数在这里出现 |
-| ep 6+ | 停在 patience=3 | val 震荡，早停 |
+| baseline (ep 0) |Around 0.0055|Only load Kronos-Tokenizer-base weight and run val; smoke actual measurement|
+| ep 1 | 0.003 — 0.004 |Big drop in 1st epoch|
+| ep 3-5 | 0.0020 — 0.0030 |Most of the best checkpoints appear here|
+| ep 6+ |Stop at patience=3|val oscillates, stops early|
 
-† **范围是估算**，真实结果以本次 run 为准。smoke 50 步已经看到 -7%，长跑应该能走到 -40 ~ -60%。
+† **The range is an estimate**, and the actual results are subject to this run. I have seen -7% in 50 steps of smoke, and I should be able to get to -40 ~ -60% in long distance running.
 
-每 epoch ~1 分钟（5090：50000 样本 / batch 50 = 1000 step × ~60 ms/step），
-4-6 epoch 早停 → **总 wall time ~5-10 分钟**，比 predictor run (10 分 18 秒) 还快。
+~1 minute per epoch (5090: 50000 samples/batch 50 = 1000 step × ~60 ms/step),
+4-6 epoch early stop → **Total wall time ~5-10 minutes**, faster than predictor run (10 minutes 18 seconds).
 
 ---
 
-## 4. 评测（baseline vs finetuned）
+## 4. Evaluation (baseline vs finetuned)
 
-两次跑 `eval_tokenizer`，一次 baseline（`NeoQuasar/Kronos-Tokenizer-base`），
-一次 `--ckpt best_model`：
+Run `eval_tokenizer` twice, baseline (`NeoQuasar/Kronos-Tokenizer-base`) once,
+Once `--ckpt best_model`:
 
 ```bash
-# 全量评测（RTX 5090：每次约 1-2 分钟）
+# Full evaluation (RTX 5090: about 1-2 minutes each time)
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
     --dataset-path ./finetune/data/crypto_1min_btc_eth \
     --batch-size 128 \
@@ -237,23 +237,23 @@ python -m kairos.training.eval_tokenizer \
     --out artifacts/tokenizer_eval_finetuned.json
 ```
 
-### 4.1 指标含义
+### 4.1 Meaning of indicators
 
-| 字段 | 含义 | 越好的方向 |
+|Field|meaning|better direction|
 |---|---|---|
-| `recon_mse_full` | 用全 codebook (s1+s2) 解码后的平均 MSE（标准化空间） | ↓ |
-| `recon_mae_full` | 同上，MAE | ↓ |
-| `recon_mse_pre_s1_only` | 只用 s1 (前半 codebook) 解码的 MSE | ↓ |
-| `bsq_loss_mean` | 训练时用的 BSQ 正则项（可为负） | — |
-| `per_channel_mse` | 按 OHLCVA 6 通道切开的 MSE | ↓ |
-| `codebook.s1.utilization` | s1 码表 unique 使用占比（0-1） | ↑ |
-| `codebook.s1.entropy_bits` | s1 token 分布的 Shannon 熵（比特） | 接近 `entropy_max_bits` 更好 |
-| `codebook.s2.*` | s2 的同样指标 | |
+| `recon_mse_full` |Average MSE (space normalized) after decoding with full codebook (s1+s2)| ↓ |
+| `recon_mae_full` |Same as above, MAE| ↓ |
+| `recon_mse_pre_s1_only` |MSE decoded using only s1 (first half of the codebook)| ↓ |
+| `bsq_loss_mean` |BSQ regularization term used during training (can be negative)| — |
+| `per_channel_mse` |MSE cut by OHLCVA 6-channel| ↓ |
+| `codebook.s1.utilization` |s1 code table unique usage ratio (0-1)| ↑ |
+| `codebook.s1.entropy_bits` |Shannon entropy of s1 token distribution (bits)|Closer to `entropy_max_bits` better|
+| `codebook.s2.*` |The same indicator for s2| |
 
-### 4.2 结果汇总模板
+### 4.2 Result summary template
 
-跑完把两份 JSON 的数字填进下表，顺便做成 `artifacts/tokenizer_eval_summary.md`，
-push HF 时用 `--metrics-file` 把它嵌进 README：
+After running, fill in the two JSON numbers into the table below and make it `artifacts/tokenizer_eval_summary.md`.
+Use `--metrics-file` when pushing HF to embed it in the README:
 
 ```markdown
 ## Results on test set (2026-01-01 ~ 2026-04-16, ~304k 1-min bars)
@@ -280,7 +280,7 @@ Per-channel MSE drop (finetuned vs baseline):
 | amt    | 0.00xx | 0.00xx | -xx% |
 ```
 
-生成 summary 的一行脚本：
+A one-line script that generates summary:
 
 ```bash
 python - <<'PY' > artifacts/tokenizer_eval_summary.md
@@ -318,10 +318,10 @@ cat artifacts/tokenizer_eval_summary.md
 
 ---
 
-## 5. 推送到 HuggingFace
+## 5. Push to HuggingFace
 
 ```bash
-export HF_TOKEN=<你的 token>   # 从 https://huggingface.co/settings/tokens 拿
+export HF_TOKEN=<your_token>   # Get it from https://huggingface.co/settings/tokens
 
 kairos-push-hf \
     --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
@@ -330,11 +330,11 @@ kairos-push-hf \
     --metrics-file artifacts/tokenizer_eval_summary.md
 ```
 
-推送后 README 会自动嵌入 `artifacts/tokenizer_eval_summary.md` 的内容。
+After pushing, the README will automatically embed the content of `artifacts/tokenizer_eval_summary.md`.
 
-### 5.1 Dry-run 预览
+### 5.1 Dry-run preview
 
-如果想先看一眼 card 长什么样：
+If you want to take a look at what card looks like:
 
 ```bash
 kairos-push-hf \
@@ -345,7 +345,7 @@ kairos-push-hf \
     --dry-run
 ```
 
-### 5.2 验证（加载回来试一次）
+### 5.2 Verification (load it and try again)
 
 ```bash
 python - <<'PY'
@@ -361,10 +361,10 @@ PY
 
 ---
 
-## 6. TL;DR 一键复现命令清单
+## 6. TL;DR One-click reproduction of the command list
 
-假设你已经按 `CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` §1–§4 把 AutoDL 环境 + BTC+ETH 2y 打包数据
-搞定（`finetune/data/crypto_1min_btc_eth/` 齐了）。
+Assume that you have packed the AutoDL environment + BTC+ETH 2y according to `CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` §1–§4
+Done (`finetune/data/crypto_1min_btc_eth/` is all done).
 
 ```bash
 cd /root/autodl-tmp/Kairos && source .venv/bin/activate
@@ -377,14 +377,14 @@ export KAIROS_DATASET=/root/autodl-tmp/Kairos/finetune/data/crypto_1min_btc_eth
 export KAIROS_NUM_WORKERS=0
 mkdir -p logs
 
-# 1. 训练（~5-10 min）
+# 1. Training (~5-10 min)
 nohup torchrun --standalone --nproc_per_node=1 \
     -m kairos.training.train_tokenizer \
     > logs/train_tokenizer.log 2>&1 &
 echo $! > logs/train_tokenizer.pid
-tail -f logs/train_tokenizer.log    # Ctrl-C 不会杀进程
+tail -f logs/train_tokenizer.log    # Ctrl-C will not kill the process
 
-# 2. 等它 early-stop，然后 evaluate（各 ~1-2 min）
+# 2. Wait for it to early-stop, then evaluate (~1-2 min each)
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
     --dataset-path ./finetune/data/crypto_1min_btc_eth \
     --batch-size 128 --out artifacts/tokenizer_eval_baseline.json
@@ -395,12 +395,12 @@ python -m kairos.training.eval_tokenizer \
     --dataset-path ./finetune/data/crypto_1min_btc_eth \
     --batch-size 128 --out artifacts/tokenizer_eval_finetuned.json
 
-# 3. 生成对比 summary
+# 3. Generate the comparison summary
 python - <<'PY' > artifacts/tokenizer_eval_summary.md
-# (上面 §4.2 里的脚本)
+# (Script in §4.2 above)
 PY
 
-# 4. 推 HF
+# 4. Push to Hugging Face
 export HF_TOKEN=<your_token>
 kairos-push-hf \
     --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
@@ -409,34 +409,34 @@ kairos-push-hf \
     --metrics-file artifacts/tokenizer_eval_summary.md
 ```
 
-**端到端 ~15 分钟**（训练 + 两次评测 + 推送），5090 成本 ≈ ¥1。
+**End-to-end ~15 minutes** (training + two evaluations + push), 5090 cost ≈ ¥1.
 
 ---
 
-## 7. 常见坑（新增）
+## 7. Common pitfalls (new)
 
-在 AGENTS.md §7 的基础上，tokenizer 单独有几个专属坑：
+Based on AGENTS.md §7, tokenizer has several exclusive pitfalls:
 
-| 症状 | 根因 | 处理 |
+|symptom|root cause|deal with|
 |---|---|---|
-| 训练 loss 一直是负数看着吓人 | `bsq_loss` 带熵正则项，训练良好时常为负；总 loss = (recon + bsq)/2 也会跟着下去 | **不看 loss，看 val_recon**；val_recon 一定是 ≥ 0 的 |
-| val_recon 开 ep 1 就突然跳 | OneCycleLR warmup 在跑；tokenizer lr=2e-4 比 predictor 大 40 倍，早期会漂一下 | 等到 ep 2-3，patience=3 已经涵盖 |
-| ep 1 val_recon 比 baseline 还高 | warmup 阶段 + 还没适应 crypto 分布 | 正常；别提前 Ctrl-C |
-| `save_pretrained` 保存出来的 ckpt 推 HF 加载不回来 | 用了 DDP 没解包 | `train_tokenizer._train` 里已经 `model.module if hasattr(model, "module") else model` 兜底 |
-| eval 出来 `codebook.s1.utilization = 1.0` | 数据量太小 / 乱序 | 确认 `n_windows` 至少 1000+；smoke 40 窗口是不够看的 |
-| 推 HF 报 `Repository not found for url: ...Kairos-base-crypto` | 还没建 repo | `--token <HF_TOKEN>` 传了就会自动 `create_repo(exist_ok=True)`，多半是 token 过期 |
-| eval 时 `RuntimeError: mat1 and mat2 shapes cannot be multiplied` | `--dataset-path` 指向 A 股 daily 包，但 preset 用了 crypto-1min（lookback=256） | 让 `--dataset-path` 和 `--preset` 对得上；或者让 `eval_tokenizer` 从 `meta.json` 自动推 |
+|Training loss is always negative and looks scary.|`bsq_loss` With entropy regularization term, it is often negative when the training is good; the total loss = (recon + bsq)/2 will also follow|**Don’t look at loss, look at val_recon**; val_recon must be ≥ 0|
+|val_recon jumps suddenly after opening ep 1|OneCycleLR warmup is running; tokenizer lr=2e-4 is 40 times larger than predictor and will drift a bit in the early stage.|Wait until ep 2-3, patience=3 has been covered|
+|ep 1 val_recon is higher than baseline|Warmup stage + not yet adapted to crypto distribution|Normal; don’t advance Ctrl-C|
+|`save_pretrained` The saved ckpt push HF cannot be loaded back|Used DDP but did not unpack it.|`train_tokenizer._train` has already revealed `model.module if hasattr(model, "module") else model`|
+|eval comes out `codebook.s1.utilization = 1.0`|The amount of data is too small/out of order|Confirm `n_windows` at least 1000+; smoke 40 window is not enough|
+|Push HF to report `Repository not found for url: ...Kairos-base-crypto`|The repo has not been created yet|`--token <HF_TOKEN>` will be automatically `create_repo(exist_ok=True)` after it is passed, most likely the token has expired.|
+|eval `RuntimeError: mat1 and mat2 shapes cannot be multiplied`|`--dataset-path` points to the A-shares daily package, but the preset uses crypto-1min (lookback=256)|Make `--dataset-path` and `--preset` match; or let `eval_tokenizer` automatically push from `meta.json`|
 
 ---
 
-## 8. 后续方向
+## 8. Follow-up direction
 
-1. **用新 tokenizer 重训 Kairos-small-crypto**：保持同样的 preset 和数据，只把
-   `config.pretrained_tokenizer_path` 换成 `Shadowell/Kairos-base-crypto`。预期
-   h30 rank-IC / ICIR 能在原基础上再抬 10-30%（tokenizer 保真度提升 + codebook
-   利用率提升的叠加效应）。
-2. **Kronos-Tokenizer-2k（更大码本）微调**：Kronos 还有个 2k tokenizer（s1/s2
-   各 11 bits），词表翻倍，理论上能压更多 crypto 特有的 regime。本仓库的
-   `train_tokenizer.py` 已经通用，只要改 `cfg.pretrained_tokenizer_path` 就能跑。
-3. **扩到 Top100 crypto**：数据量 × 50，tokenizer 的 codebook 利用率会再涨一截；
-   参考 `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md` 的宇宙。
+1. **Retrain Kairos-small-crypto with new tokenizer**: Keep the same preset and data, just change
+`config.pretrained_tokenizer_path` is replaced by `Shadowell/Kairos-base-crypto`. expected
+h30 rank-IC / ICIR can be improved by 10-30% on the original basis (tokenizer fidelity improvement + codebook
+The additive effect of increased utilization).
+2. **Kronos-Tokenizer-2k (larger codebook) fine-tuning**: Kronos also has a 2k tokenizer (s1/s2
+11 bits each), doubling the vocabulary, theoretically able to suppress more crypto-specific regimes. This repository
+`train_tokenizer.py` is already common, just change it to `cfg.pretrained_tokenizer_path` and it will run.
+3. **Expansion to Top100 crypto**: Data volume × 50, tokenizer’s codebook utilization will increase further;
+Reference to the universe of `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md`.

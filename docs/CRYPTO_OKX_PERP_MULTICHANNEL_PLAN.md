@@ -1,117 +1,117 @@
-# Crypto OKX 永续多通道改造计划
+# Crypto OKX perpetual multi-channel transformation plan
 
-> **状态**：草稿 / 待 review
-> **目的**：让 `--market crypto` 真正利用 funding / OI / basis，彻底解锁 `MARKET_EXOG_COLS` 的 5 个"数据驱动"位。
-> **不破坏**：A 股主路径、binance_vision 现货采集、已有的现货 Top100 run。
-
----
-
-## 0. 动机 — 为什么必须改
-
-CRYPTO_TOP100_1Y_SPOT_RUN.md §11 的 h30 结果很亮（ICIR 0.454），但 h1/h5 翻负。
-排查后发现根因 = **EXOG 的 5 个数据驱动位 (`funding_rate`, `funding_rate_z`, `oi_change`, `basis`, `btc_dominance`) 在任何现有 run 里都永远是 0**。
-
-原因：
-
-1. `CryptoAdapter.market_features` 设计上会吃 `context.extras["funding_rate"]` 等，但**没有任何代码往 `extras` 里塞东西**。
-2. `kairos-collect` 的 crypto 路径只落盘 OHLCV parquet，不采集 funding / OI / spot。
-3. `prepare_dataset.build_features(...)` 不传 `extras`，`extras={}` → adapter `_align_series` 返回全 NaN → fillna(0) → 就是 0。
-
-因此：哪怕我们切到 OKX 永续，只要不改代码，EXOG 的"永续专属"那 5 列还是 0，模型看到的"永续"跟"现货"几乎没差。
+> **Status**: Draft/To be reviewed
+> **Purpose**: Let `--market crypto` truly utilize funding / OI / basis and completely unlock the 5 "data-driven" bits of `MARKET_EXOG_COLS`.
+> **No damage**: A-shares main path, binance_vision spot collection, existing spot Top100 run.
 
 ---
 
-## 1. 数据落盘规范
+## 0. Motivation – Why the change is necessary
 
-### 1.1 目录布局
+CRYPTO_TOP100_1Y_SPOT_RUN.md §11's h30 result is bright (ICIR 0.454), but h1/h5 are negative.
+After investigation, it was found that the root cause = **EXOG's 5 data driver bits (`funding_rate`, `funding_rate_z`, `oi_change`, `basis`, `btc_dominance`) are always 0** in any existing run.
+
+reason:
+
+1. `CryptoAdapter.market_features` is designed to eat `context.extras["funding_rate"]` and so on, but **no code is inserted into `extras`**.
+2. The crypto path of `kairos-collect` only stores OHLCV parquet and does not collect funding / OI / spot.
+3. `prepare_dataset.build_features(...)` does not pass `extras`, `extras={}` → adapter `_align_series` returns all NaN → fillna(0) → is 0.
+
+Therefore: even if we switch to OKX perpetual, as long as we do not change the code, the 5 columns of EXOG's "perpetual exclusive" are still 0, and the "perpetual" and "spot" seen by the model are almost the same.
+
+---
+
+## 1. Data placement specifications
+
+### 1.1 Directory layout
 
 ```
-raw/crypto/perp_1min_top100/          # 主目录，存 perp OHLCV parquet
-  BTC_USDT-USDT.parquet               # 与现有 sanitize_symbol 一致
+raw/crypto/perp_1min_top100/          # Home directory, save perp OHLCV parquet
+  BTC_USDT-USDT.parquet               # Consistent with the existing `sanitize_symbol` rule
   ETH_USDT-USDT.parquet
   ...
-  _extras/                            # 辅助因子目录（双下划线前缀避免和 symbol 名冲突）
+  _extras/                            # Auxiliary factor directory (double underscore prefix avoids conflict with symbol names)
     funding/
-      BTC_USDT-USDT.parquet           # 单列 funding_rate，8h 一条
+      BTC_USDT-USDT.parquet           # Single column funding_rate, 8h one
       ...
     open_interest/
-      BTC_USDT-USDT.parquet           # 单列 open_interest，5min 一条
+      BTC_USDT-USDT.parquet           # Single column open_interest, 5min one
       ...
     spot/
-      BTC_USDT-USDT.parquet           # spot close 1min，用来算 basis
+      BTC_USDT-USDT.parquet           # spot close 1min, used to calculate basis
       ...
-    btc_dominance.parquet             # 全市场共享一条，1min 或 1h 粒度
+    btc_dominance.parquet             # Shared by the whole market, with 1min or 1h granularity
 ```
 
-### 1.2 parquet schema（所有辅助 parquet 共用约定）
+### 1.2 parquet schema (convention shared by all auxiliary parquet)
 
-| 列名 | 类型 | 说明 |
+|List|type|illustrate|
 |---|---|---|
-| `datetime` | `datetime64[ns]` (naive, UTC) | 与主 parquet 同步，便于 `_align_series` reindex |
-| `<payload>` | float64 | 单列 payload：`funding_rate` / `open_interest` / `spot_close` / `btc_dominance` |
+| `datetime` | `datetime64[ns]` (naive, UTC) |Synchronized with the main parquet for easy `_align_series` reindex|
+| `<payload>` | float64 |Single column payload: `funding_rate` / `open_interest` / `spot_close` / `btc_dominance`|
 
-- 一个辅助 parquet 只存一列 payload + datetime，不掺别的，方便直接 `df.set_index("datetime")["<col>"]`。
-- `datetime` 必须已去重、升序排列。
+- An auxiliary parquet only stores one column of payload + datetime, without adding anything else, so it is convenient to directly `df.set_index("datetime")["<col>"]`.
+- `datetime` Must be deduplicated and sorted in ascending order.
 
-### 1.3 为什么不直接合并到主 parquet
+### 1.3 Why not merge directly into main parquet
 
-- 频率不同：K-line 1min、funding 8h、OI 5min —— 合并进主 parquet 需要 ffill/reindex，会丢失原始频率信息。
-- 再采集时，重跑某一通道不会牵连主 K-line。
-- 跟现有的 `fetch_one → to_parquet` 保持解耦，不改旧的 dataframe schema。
+- Different frequencies: K-line 1min, funding 8h, OI 5min - merging into the main parquet requires ffill/reindex, and the original frequency information will be lost.
+- When collecting again, rerunning a certain channel will not involve the main K-line.
+- Keep decoupled from the existing `fetch_one → to_parquet` and do not change the old dataframe schema.
 
 ---
 
-## 2. 采集层改动（Phase 2）
+## 2. Changes to the collection layer (Phase 2)
 
-### 2.1 API 扩展
+### 2.1 API extension
 
-在 `kairos-collect` 增加 CLI flag（默认关闭，不影响现货 run）：
+Add CLI flag in `kairos-collect` (closed by default, does not affect spot run):
 
 ```
 --crypto-extras {none,funding,oi,spot,basis,all}[,...]
     default: none (backwards-compatible)
-    值:
-      funding   → 采 OKX funding-rate-history (8h 粒度)
-      oi        → 采 OKX open-interest-history (5m 粒度)
-      spot      → 采对应 spot symbol 的 1min OHLCV（用于算 basis）
-      basis     → 只采 spot，打包时再算 basis（= spot 的别名，保留两个名字）
+    values:
+      funding   → collect OKX funding-rate-history (8h frequency)
+      oi        → collect OKX open-interest-history (5m frequency)
+spot → adopt the 1min OHLCV corresponding to the spot symbol (used to calculate basis)
+basis → only use spot, then calculate basis when packaging (= alias of spot, keep two names)
       all       → funding + oi + spot
 ```
 
-### 2.2 分工
+### 2.2 Division of labor
 
-| 模块 | 职责 |
+|module|Responsibilities|
 |---|---|
-| `kairos/data/collect.py::main` | 解析 `--crypto-extras`，下发给 adapter |
-| `kairos/data/markets/crypto.py::CryptoAdapter.fetch_extras(symbol, …)` | 新方法：按请求集合调 OKX 对应端点，返回 `{"funding": df, "oi": df, "spot": df}` |
-| `kairos/data/crypto_extras.py`（新文件） | 落盘 util：`save_extras(out_dir, symbol, extras_dict)` + `load_extras(out_dir, symbol, kinds)` |
-| `kairos/data/collect.py::fetch_one` | 采完 OHLCV 后，若 `--crypto-extras != none`，再串行调 `fetch_extras` 写 `_extras/<kind>/` |
+| `kairos/data/collect.py::main` |Parse `--crypto-extras` and send it to adapter|
+| `kairos/data/markets/crypto.py::CryptoAdapter.fetch_extras(symbol, …)` |New method: call the OKX corresponding endpoint according to the request set and return `{"funding": df, "oi": df, "spot": df}`|
+|`kairos/data/crypto_extras.py` (new file)|Drop util: `save_extras(out_dir, symbol, extras_dict)` + `load_extras(out_dir, symbol, kinds)`|
+| `kairos/data/collect.py::fetch_one` |After collecting OHLCV, if `--crypto-extras != none`, then serially adjust `fetch_extras` and write `_extras/<kind>/`|
 
-### 2.3 为什么串行、不并发
+### 2.3 Why serial and not concurrent
 
-- OKX 的限流是**端点级 IP 限流**（`public/*` 20 req/2s，`rubik/stat/*` 5 req/2s），同一 symbol 内 extras 4 类各跑一次，总请求数小（funding 10-50 次 + OI ~30 次 + spot 和主 K-line 对等），4 worker 并发基本不会触发。
-- 极端情况下加一个全局 `ccxt enableRateLimit=True` 就够了，不需要自己写限流。
+- OKX's current limit is **endpoint-level IP current limit** (`public/*` 20 req/2s, `rubik/stat/*` 5 req/2s). Each of the 4 types of extras in the same symbol is run once. The total number of requests is small (funding 10-50 times + OI ~30 times + spot and main K-line peering), and 4 worker concurrency will basically not be triggered.
+- In extreme cases, it is enough to add a global `ccxt enableRateLimit=True`, and there is no need to write the current limit yourself.
 
-### 2.4 断点续传
+### 2.4 Resume download from breakpoint
 
-复用现有 `daily_append` 逻辑：
+Reuse existing `daily_append` logic:
 
-- 每种 extras parquet 单独 `_load_existing`，若已存在则只增量抓新时间段。
-- 失败的 extras 不影响主 OHLCV 保存（采主成功 + extras 失败 = 记 warn，任务仍算 ok）。
+- Each extras parquet is `_load_existing` individually. If it already exists, only the new time period will be incrementally captured.
+- Failed extras do not affect the main OHLCV save (main acquisition success + extras failure = warn, the task is still considered ok).
 
 ---
 
-## 3. 打包层改动（Phase 3）
+## 3. Packaging layer changes (Phase 3)
 
-### 3.1 改动点
+### 3.1 Changes
 
-`kairos/data/prepare_dataset.py::per_symbol_split`（L120）当前：
+`kairos/data/prepare_dataset.py::per_symbol_split` (L120) Current:
 
 ```python
 df = build_features(df, index_df, market=market, symbol=path.stem)
 ```
 
-改为：
+Change to:
 
 ```python
 extras = None
@@ -124,19 +124,19 @@ if market == "crypto":
 df = build_features(df, index_df, market=market, symbol=path.stem, extras=extras)
 ```
 
-### 3.2 `load_for_symbol` 行为
+### 3.2 `load_for_symbol` Behavior
 
-- 查 `path.parent / "_extras" / <kind> / <stem>.parquet` 是否存在，存在就读出来，以 `datetime` 为 index 返回 Series。
-- 缺失的 kind 直接不进 `extras` dict，adapter 侧 `_align_series` 会返回 NaN → fillna(0)。**向后兼容**：如果用户没采 extras，打包行为跟今天完全一致。
-- 返回的 dict key 跟 `CryptoAdapter.market_features` 读取的 key 保持一致：
-  - `"funding_rate"` → funding parquet 的 `funding_rate` 列
-  - `"open_interest"` → OI parquet 的 `open_interest` 列
-  - `"spot_close"` → spot parquet 的 `close` 列
-  - `"btc_dominance"` → `_extras/btc_dominance.parquet`（全市场共享文件）
+- Check whether `path.parent / "_extras" / <kind> / <stem>.parquet` exists, read out if it exists, and return the Series with `datetime` as the index.
+- The missing kind will not be entered directly into the `extras` dict, and the adapter side `_align_series` will return NaN → fillna(0). **Backward Compatibility**: If the user does not choose extras, the packaging behavior is exactly the same as today.
+- The returned dict key is consistent with the key read by `CryptoAdapter.market_features`:
+  - `"funding_rate"` → `funding_rate` column of funding parquet
+  - `"open_interest"` → `open_interest` column of OI parquet
+  - `"spot_close"` → spot parquet’s `close` column
+  - `"btc_dominance"` → `_extras/btc_dominance.parquet` (market-wide shared file)
 
-### 3.3 meta.json 扩展
+### 3.3 meta.json extension
 
-打包结束后写的 `meta.json` 增加一个字段：
+`meta.json` written after packaging is completed adds a field:
 
 ```json
 {
@@ -147,49 +147,49 @@ df = build_features(df, index_df, market=market, symbol=path.stem, extras=extras
 }
 ```
 
-下游 backtest 或文档生成可以直接读这个，无需重新探测目录。
+Downstream backtest or document generation can read this directly without re-exploring the directory.
 
 ---
 
-## 4. 不做的事
+## 4. Things not to do
 
-1. **不动 KronosWithExogenous 的 `n_exog=32`**。架构不变式。
-2. **不做 spot VWAP / spot volume**。basis 只用 spot close。
-3. **不做 binance_futures adapter**。留在后续做。
-4. **不删除、不重命名** 已有的 parquet 目录（`binance_vision/*` 现货继续可用）。
+1. **Not moving `n_exog=32`** of KronosWithExogenous. Architectural invariants.
+2. **Does not do spot VWAP/spot volume**. basis only use spot close.
+3. **Does not make binance_futures adapter**. Leave it to follow.
+4. **Do not delete or rename** The existing parquet directory (`binance_vision/*` spot will continue to be available).
 
 ---
 
-## 5. 时间预算
+## 5. Time budget
 
-| Phase | 工作 | 估时 |
+| Phase |Work|estimate time|
 |---|---|---|
-| 2 | 改 collect.py + crypto adapter + crypto_extras.py 写入 | 2-3 h |
-| 3 | 改 prepare_dataset.py + crypto_extras.py 读取 | 1 h |
-| 4 | 本地 Top3 × 1 day smoke（验证 extras 值有异、build_features 32 列非零） | 30 min |
+| 2 |Change collect.py + crypto adapter + crypto_extras.py and write| 2-3 h |
+| 3 |Change prepare_dataset.py + crypto_extras.py to read| 1 h |
+| 4 |Local Top3 × 1 day smoke (verify that the extras values ​​are different and the build_features 32 columns are non-zero)| 30 min |
 | 5 | AutoDL Top5 × 1 day mini end-to-end | 2 h |
-| 6 | Top100 × 1 年全量采集 + 训练 + 回测 | 10-12 h（大头在采集和回测 stride=10） |
-| 7 | 写 docs/CRYPTO_PERP_RUN.md + 对比表 | 1 h |
-| **总计** | | **~18 h** |
+| 6 |Top100 × 1 year full collection + training + backtest|10-12 h (big head in acquisition and backtest stride=10)|
+| 7 |Write docs/CRYPTO_PERP_RUN.md + comparison table| 1 h |
+|**total**| | **~18 h** |
 
 ---
 
-## 6. 失败场景 & fallback
+## 6. Failure scenarios & fallback
 
-| 场景 | fallback |
+|scene| fallback |
 |---|---|
-| OKX API 某个 symbol funding/OI 404（非永续或已下架） | 该 kind 不写 parquet，打包侧 `_align_series → NaN → 0`，继续训练 |
-| mihomo 断连 / 节点被封 | `fetch_extras` 的 ccxt retry 会报错，`fetch_one` 记 `fail` 但不中断整批 |
-| spot symbol 不存在（某些 alt coin 只有 perp，没对应 spot） | 跳过 spot，basis=0 |
-| **OKX funding-rate-history 保留 ~90 天**（Phase-5 实测二分法：90d ok、120d 起空表）| 1 年 run 里最老的 ~9 个月 funding 全空；接受 `_align_series` 填 0，或者改写 adapter 从 `fetchFundingRate`（当前实时值）走 crontab 自建历史 |
-| **OKX contracts/open-interest-history 只返回最近 ~8 小时**（实测：默认 100 条 5m；`after`/`before`/`begin`/`end` 参数都不给翻老数据）| 正式训练必须放弃历史 OI；要么实时订阅并自建 parquet 累积，要么接受 `oi_change` 列长期为 0（与 BTC/ETH spot run 持平）。Phase 5 mini 因为窗口 > 8h 也会拿不到 → 是**预期**，不是 bug。mini 要真实 OI 就把窗口收到最近 5 小时 |
+|OKX API symbol funding/OI 404 (non-perpetual or removed from the shelves)|This kind does not write parquet, pack the side `_align_series → NaN → 0`, and continue training.|
+|mihomo disconnected/node blocked|The ccxt retry of `fetch_extras` will report an error, `fetch_one` will remember `fail` but the entire batch will not be interrupted.|
+|spot symbol does not exist (some alt coins only have perp and do not correspond to spot)|Skip spot, basis=0|
+|**OKX funding-rate-history is retained for ~90 days** (Phase-5 measured dichotomy: 90d ok, 120d empty table)|The oldest ~9 months funding in the 1 year run is all empty; accept `_align_series` and fill in 0, or rewrite adapter and go to crontab to build history from `fetchFundingRate` (current real-time value)|
+|**OKX contracts/open-interest-history only returns the last ~8 hours** (actual measurement: default 100 items 5m; `after`/`before`/`begin`/`end` parameters do not provide old data)|Formal training must give up historical OI; either subscribe in real time and build your own parquet accumulation, or accept the `oi_change` column to be 0 in the long term (the same as the BTC/ETH spot run). Phase 5 mini cannot be obtained because the window is > 8h → This is **expected**, not a bug. If mini wants real OI, just receive the window in the last 5 hours|
 
 ---
 
-## 7. 验证清单（Phase 4/5 用）
+## 7. Verification Checklist (for Phase 4/5)
 
-- [ ] 采完 BTC-USDT-SWAP 一天：主 parquet 1440 行、funding parquet 3 行（8h）、OI parquet 288 行（5m）、spot parquet 1440 行
-- [ ] `build_features(perp_df, market="crypto", extras={funding, oi, spot})` 输出 32 列，其中 `funding_rate` 非零比例 > 0
-- [ ] `prepare_dataset` 产出 `exog_train.pkl` 的均值/方差对 5 个永续专属列**非零**（z-score 后应该是有分布的）
-- [ ] `train_predictor` smoke（KAIROS_SMOKE=1）跑通
-- [ ] `backtest_ic` smoke 跑通，结果文件落盘
+- [ ] After mining BTC-USDT-SWAP for one day: main parquet 1440 lines, funding parquet 3 lines (8h), OI parquet 288 lines (5m), spot parquet 1440 lines
+- [ ] `build_features(perp_df, market="crypto", extras={funding, oi, spot})` Output 32 columns where `funding_rate` non-zero scale > 0
+- [ ] `prepare_dataset` Outputs the mean/variance pair of `exog_train.pkl` 5 perpetual exclusive columns **non-zero** (z-score should be distributed)
+- [ ] `train_predictor` smoke (KAIROS_SMOKE=1) runs through
+- [ ] `backtest_ic` smoke runs through, and the result file is placed on disk

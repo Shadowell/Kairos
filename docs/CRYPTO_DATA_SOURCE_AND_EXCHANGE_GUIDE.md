@@ -1,6 +1,6 @@
-# Crypto 数据源与交易所接入指南
+# Crypto data source and exchange access guide
 
-> 这份文档解释 Kairos 的 crypto 数据层如何工作：默认接哪个交易所、不同网络环境下怎么采数据、怎么扩展到新的交易所后端。
+> This document explains how Kairos' crypto data layer works: which exchange is connected by default, how to collect data in different network environments, and how to extend to new exchange backends.
 
 Kairos supports crypto markets out of the box through a pluggable exchange
 backend. By default it connects to **OKX USDT-margined perpetual swaps**; the
