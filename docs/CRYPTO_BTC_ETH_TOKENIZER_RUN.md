@@ -1,4 +1,4 @@
-# Crypto BSQ Tokenizer 微调（Kronos-Tokenizer-base → Kairos-base-crypto）
+# Crypto BTC/ETH Tokenizer 微调与评测记录
 
 > 参考之前跑 [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto)
 > （predictor 微调）的完整流程，这次**把同一套 BTC/USDT + ETH/USDT 2 年 1min
@@ -6,9 +6,9 @@
 > 再推到 `Shadowell/Kairos-base-crypto`。
 >
 > 相关文档：
-> - [`AUTODL_GUIDE.md`](AUTODL_GUIDE.md) — AutoDL 通用租卡训练手册
-> - [`CRYPTO_BTC_ETH_RUN.md`](CRYPTO_BTC_ETH_RUN.md) — 同一批数据的 predictor run，复用那里的 §1–§4 环境 + 采集 + 打包步骤
-> - [`TUNING_PLAYBOOK.md`](TUNING_PLAYBOOK.md) — 调参手册
+> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 通用租卡训练手册
+> - [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) — 同一批数据的 predictor run，复用那里的 §1–§4 环境 + 采集 + 打包步骤
+> - [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) — 调参手册
 
 ---
 
@@ -33,7 +33,7 @@ Fine-tune 一遍 BSQ tokenizer 有望：
 
 ## 1. 前置：数据和环境
 
-如果你已经按 [`CRYPTO_BTC_ETH_RUN.md`](CRYPTO_BTC_ETH_RUN.md) §1–§4 跑完一次（本地采 BTC+ETH 2y 1min
+如果你已经按 [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) §1–§4 跑完一次（本地采 BTC+ETH 2y 1min
 parquet，或者已经打包好 `finetune/data/crypto_1min_btc_eth/`），**直接跳到 §3**。
 
 否则按那份文档的 TL;DR：
@@ -363,7 +363,7 @@ PY
 
 ## 6. TL;DR 一键复现命令清单
 
-假设你已经按 `CRYPTO_BTC_ETH_RUN.md` §1–§4 把 AutoDL 环境 + BTC+ETH 2y 打包数据
+假设你已经按 `CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` §1–§4 把 AutoDL 环境 + BTC+ETH 2y 打包数据
 搞定（`finetune/data/crypto_1min_btc_eth/` 齐了）。
 
 ```bash
@@ -439,4 +439,4 @@ kairos-push-hf \
    各 11 bits），词表翻倍，理论上能压更多 crypto 特有的 regime。本仓库的
    `train_tokenizer.py` 已经通用，只要改 `cfg.pretrained_tokenizer_path` 就能跑。
 3. **扩到 Top100 crypto**：数据量 × 50，tokenizer 的 codebook 利用率会再涨一截；
-   参考 `docs/CRYPTO_TOP100_RUN.md` 的宇宙。
+   参考 `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md` 的宇宙。

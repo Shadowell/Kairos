@@ -1,4 +1,4 @@
-# AutoDL 微调 Kronos 完整指南
+# AutoDL 远端训练与回传指南
 
 > 本地 Mac 没有 CUDA 时的标准流程：在本地完成数据采集 + 数据集准备，到 AutoDL GPU 实例上跑微调，再把 checkpoint 拉回本地做回测。
 >

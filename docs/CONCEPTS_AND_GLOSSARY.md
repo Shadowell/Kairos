@@ -1,4 +1,4 @@
-# Kairos 术语速查（新手向）
+# Kairos 概念与术语表
 
 > 这份文档把 Kronos fine-tune 流程里会反复出现的名词**按"我们在这个项目里干了什么"的顺序**讲一遍。每个词都带具体例子和实际数字，看完你应该能理解 v1 / v2 训练报告里的每句话。
 
@@ -592,7 +592,7 @@ pretrained_predictor_path = "NeoQuasar/Kronos-small"
 
 ## 延伸阅读（项目内）
 
-- [AUTODL_GUIDE.md](AUTODL_GUIDE.md) — AutoDL 上整套部署流程
-- [TUNING_PLAYBOOK.md](TUNING_PLAYBOOK.md) — 调参实战手册
-- [CRYPTO_GUIDE.md](CRYPTO_GUIDE.md) — 加密市场接入与训练指引
+- [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 上整套部署流程
+- [TRAINING_TUNING_PLAYBOOK.md](TRAINING_TUNING_PLAYBOOK.md) — 调参实战手册
+- [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) — 加密市场接入与训练指引
 - [../artifacts/autodl_run_v2_20260417/train_summary.md](../artifacts/autodl_run_v2_20260417/train_summary.md) — v2 本次报告

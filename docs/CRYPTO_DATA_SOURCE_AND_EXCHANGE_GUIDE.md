@@ -1,4 +1,6 @@
-# Crypto Market Guide
+# Crypto 数据源与交易所接入指南
+
+> 这份文档解释 Kairos 的 crypto 数据层如何工作：默认接哪个交易所、不同网络环境下怎么采数据、怎么扩展到新的交易所后端。
 
 Kairos supports crypto markets out of the box through a pluggable exchange
 backend. By default it connects to **OKX USDT-margined perpetual swaps**; the
@@ -6,8 +8,8 @@ abstraction (`kairos.data.markets.crypto_exchanges.CryptoExchange`) is
 deliberately thin so that Binance, Bybit, Hyperliquid and friends can be
 added by dropping in one file.
 
-This guide is a companion to [`AUTODL_GUIDE.md`](AUTODL_GUIDE.md) and
-[`GLOSSARY.md`](GLOSSARY.md); keep them handy.
+This guide is a companion to [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) and
+[`CONCEPTS_AND_GLOSSARY.md`](CONCEPTS_AND_GLOSSARY.md); keep them handy.
 
 ---
 

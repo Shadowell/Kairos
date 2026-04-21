@@ -22,6 +22,21 @@
 
 ---
 
+## 🧭 从哪里开始读
+
+README 只保留**项目概览、上手入口、当前结果和核心架构**。更细的操作步骤、实验记录和路线图都拆到了 `docs/`。
+
+| 你现在要做什么 | 先看哪份文档 |
+|---|---|
+| 第一次接触仓库，想知道有哪些文档 | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
+| 想快速理解术语、指标和项目背景 | [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) |
+| 想在远端 GPU 上复现实验 | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
+| 想跑 crypto 数据采集 / 训练 / 回测 | [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) |
+| 想看已经跑过的实验结果 | [docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md), [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md), [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) |
+| 想看接下来该做什么 | [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) |
+
+---
+
 ## 📈 核心成果
 
 ### 加密货币 1-min 微调
@@ -30,20 +45,20 @@
 
 | run | universe | 训练区间 | test 样本 | rank-IC (baseline → finetuned) | **ICIR (baseline → finetuned)** | hit_rate | 详情 |
 |---|---|---|---|---|---|---|---|
-| 2026-04-17 | BTC + ETH（2 币） | 2024-01 ~ 2026-04 | 30 万 | +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_RUN.md](docs/CRYPTO_BTC_ETH_RUN.md) |
-| 2026-04-20 | Binance Spot Top100（100 币） | 2025-04 ~ 2026-04 | 110 万 | +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_RUN.md](docs/CRYPTO_TOP100_RUN.md) |
+| 2026-04-17 | BTC + ETH（2 币） | 2024-01 ~ 2026-04 | 30 万 | +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) |
+| 2026-04-20 | Binance Spot Top100（100 币） | 2025-04 ~ 2026-04 | 110 万 | +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
 | 2026-04-21 | BTC + ETH（2 币，`Kronos-base`） | 2024-01 ~ 2026-04 | 30 万 | +0.055 → **+0.076** | +0.325 → **+0.484** | 52.9% | [Shadowell/Kairos-base-crypto](https://huggingface.co/Shadowell/Kairos-base-crypto) |
-| 2026-04-20 ⚠️ | OKX **永续 Top10**（首次拿到真实 funding/basis） | 2026-03-21 ~ 2026-04-17（30d） | 4 万 | +0.008 → +0.016 (n=3 噪声) | +1.17 → +0.06 (n=3 噪声) | 50.9% | [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md)（**post-mortem**）|
+| 2026-04-20 ⚠️ | OKX **永续 Top10**（首次拿到真实 funding/basis） | 2026-03-21 ~ 2026-04-17（30d） | 4 万 | +0.008 → +0.016 (n=3 噪声) | +1.17 → +0.06 (n=3 噪声) | 50.9% | [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)（**post-mortem**）|
 
 - **ICIR 从 0.325 再抬到 0.454**（+40%）—— Top100 把信号的稳定性推过 0.4 线；对组合化使用是最看重的指标。
 - **`Kronos-base` 在同一套 BTC/ETH 数据上继续抬升到 `rank-IC=+0.076 / ICIR=+0.484`**，说明当前瓶颈不只是 universe，模型容量本身也在起作用。
 - rank-IC 绝对值从 5% 掉到 3%：Top100 里很多小币的 30-min 方向性弱于 BTC/ETH，单券方向 alpha 被稀释，横截面相对强弱 alpha 更凸显。
-- **h1 / h5 两次 run 结果都不理想**：binance_vision 镜像没有 funding / OI / basis，短 horizon 最吃的微观因子被 pad 为 0；Top100 run 里 h1/h5 甚至被模型学成反向信号，详见 CRYPTO_TOP100_RUN.md §7.5。修正方向见文档 §11。
-- **永续 Top10 30d run（⚠️）链路打通了**——首次把 OKX 真实非零 `funding_rate` 和 `basis` 喂进 32 维 exog；但训练效果是负迁移，root cause 是 `KAIROS_N_TRAIN_ITER=5000` 残留 + test 区只 3 天 + bucket 选错三层叠加，**代码本身没 regression**（用老数据复跑老结果通过）。完整 post-mortem 见 [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md)，也能当 "怎么读 IC 报告" 的反面教材；正面教材是 [BACKTEST_IC_GUIDE.md](docs/BACKTEST_IC_GUIDE.md)。
+- **h1 / h5 两次 run 结果都不理想**：binance_vision 镜像没有 funding / OI / basis，短 horizon 最吃的微观因子被 pad 为 0；Top100 run 里 h1/h5 甚至被模型学成反向信号，详见 CRYPTO_TOP100_1Y_SPOT_RUN.md §7.5。修正方向见文档 §11。
+- **永续 Top10 30d run（⚠️）链路打通了**——首次把 OKX 真实非零 `funding_rate` 和 `basis` 喂进 32 维 exog；但训练效果是负迁移，root cause 是 `KAIROS_N_TRAIN_ITER=5000` 残留 + test 区只 3 天 + bucket 选错三层叠加，**代码本身没 regression**（用老数据复跑老结果通过）。完整 post-mortem 见 [CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)，也能当 "怎么读 IC 报告" 的反面教材；正面教材是 [BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md)。
 
 ### A 股日线（对比基线）
 
-训了两版（time-split v1 + interleave-split v2），test IC 都为负，结论：在现成 EXOG schema 下 A 股日线信号偏弱。下一步方向（调权重冻结策略、改监督信号、换到分钟级）写在 [docs/TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md)。
+训了两版（time-split v1 + interleave-split v2），test IC 都为负，结论：在现成 EXOG schema 下 A 股日线信号偏弱。下一步方向（调权重冻结策略、改监督信号、换到分钟级）写在 [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md)。
 
 ### 已发布模型
 
@@ -253,7 +268,7 @@ kairos-collect --market crypto \
     --out ./raw/crypto/1min --workers 1
 ```
 
-完整加密货币工作流（代理、API key、自定义交易所）见 [docs/CRYPTO_GUIDE.md](docs/CRYPTO_GUIDE.md)。
+完整加密货币工作流（代理、API key、自定义交易所）见 [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)。
 
 ### 2. 生成训练集
 
@@ -290,7 +305,7 @@ KAIROS_BATCH_SIZE=32 KAIROS_LR=5e-6 \
     torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 
 # 可选：先微调 Tokenizer（通常不必，直接用 NeoQuasar 官方版即可；
-# 完整流程和评测脚本见 docs/CRYPTO_TOKENIZER_RUN.md）
+# 完整流程和评测脚本见 docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md）
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
 python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
     --dataset-path ./finetune/data/crypto_1min \
@@ -363,7 +378,7 @@ curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -
 
 ## 🧬 三种模型改造方案
 
-Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md)。
+Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md)。
 
 | 方案 | 做法 | 成本 | 复用预训练 |
 |---|---|---|---|
@@ -373,61 +388,33 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 
 ---
 
-## 🗺️ 下一步计划
+## 🗺️ 当前路线图
 
-从 Top10 30d perp post-mortem 沉淀出来的具体待办。**优先按 ROI 排**，每条都带"完成判定"和估计工时（GPU 小时按 RTX 5090 单卡估）。
+研究待办、优先级和验收标准已经从 README 拆到单独文档：
 
-### Tier 1 · 修 bug / 已知坑（欠的技术债）
+- [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) — 当前路线图、优先级、验收标准、工时估算
+- [docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md](docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) — 最近一次失败实验的完整复盘
+- [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) — 跨实验复用的调参与故障排查经验
+- [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) — 指标阅读和回测 sanity check
 
-| # | 事项 | 完成判定 | 成本 | 依据 |
-|---|---|---|---|---|
-| D1 | **Top10 30d perp 重跑**：清掉 `KAIROS_N_TRAIN_ITER=5000` 残留，用默认 50000 samples/epoch 重训 10 epoch | finetuned rank-IC > baseline；`val_ce` 降幅 > 0.01 | 0.3h 训练 + 0.1h 回测 | [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md) post-mortem |
-| D2 | **扩 perp test 区到 ≥ 15 天**（目前只 3 天 → `n_dates=3` 让 ICIR 全是噪声） | 新数据集 `meta.json` 里 test 区 ≥ 15 天；回测 `n_dates ≥ 15` | 0.2h 打包 + 0.1h 回测 | 同上 |
-| B1 | **修 `backtest_ic` 的 `auto` bucket 逻辑**：当 `n_dates < 10` 时 fallback 到 `none` 并打 warn，避免再看到伪高 ICIR=+1.17 | 新加回归测试 `tests/test_backtest_auto_bucket.py`；`auto` 在小 bucket 数下自动降级 | 0.5h 代码 | [BACKTEST_IC_GUIDE.md](docs/BACKTEST_IC_GUIDE.md) §"常见误读案例" |
-| B2 | **修蜡烛形态 `h == l` 边缘情况**：当根 K 线完全不动时，目前 `amplitude/body_ratio/upper_shadow/lower_shadow` 会被 `1e-9` 分母钳死为 0（Top10 30d 数据里约 5% 的 bar 落入），应改为 NaN 让下游统一 fillna | `body_ratio + upper_shadow + lower_shadow` 在非 NaN 样本上 `max - min < 1e-6`；测试用例覆盖 `h == l` 情况 | 0.5h 代码 | 诊断见 2026-04-20 对话里的微观结构分布验证 |
-| B3 | **修训练 target 的量纲不一致**：`train_predictor.py` 用 `close_diff` cumulative（k=29 比 k=0 量纲大 30×，短 horizon 被长 horizon 主导）；backtest 却用 raw log-return。统一成 per-step log-return + `sqrt(k+1)` 归一化 | h1/h5 IC 在 BTC/ETH 2yr 老数据上不再 ≈ 0 或负；h30 不显著退化 | 1h 代码 + 2h 重训验证 | [TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md) §8.2 |
-
-### Tier 2 · 结构性改进（验证"永续能不能赢现货"）
-
-| # | 事项 | 完成判定 | 成本 | 依据 |
-|---|---|---|---|---|
-| S1 | **Top100 × 90d OKX 永续**（90 天 = funding 历史上限）：首次在 perp 上凑足 ≈ 1300 万样本 | h30 rank-IC ≥ +0.030（Top100 现货 baseline）；funding / basis **非零**覆盖率 > 95% | 0.5h 采集 + 1h 训练 + 0.5h 回测 | ROI 最高的扩容路径 |
-| S2 | **crypto-1min-short preset**：新增 `return_horizon=5` 的 preset，验证永续微观结构对短 horizon 的增量信号 | 短 horizon IC > 同数据的 h30 preset；至少在 BTC/ETH 上成立 | 0.5h preset + 1h 重训 + 回测 | 永续优势理论上应在分钟级显著 |
-| S3 | **Funding / basis 做 regime 异常标签**：把 `\|funding_rate\| > 0.1%` 和 `basis < -0.3%` 显式变成 0/1 列（占 pad slot），而不是让模型自己学极端反转 | 在 Top100 × 90d 数据上，regime=1 时的 hit_rate 比 regime=0 时高 2pp 以上 | 2h 代码 + 重训 + 回测 | 前期讨论里的"防御信号 vs 进攻信号" |
-
-### Tier 3 · 长期方向（需要时间积累或大改）
-
-| # | 事项 | 完成判定 | 成本 | 阻塞点 |
-|---|---|---|---|---|
-| L1 | **OI 实时采集 cron**：AutoDL 起每 1min 打点的 `cron_collect_oi.sh`，落盘到 `raw/crypto/oi_stream/` | 连续运行 4 周无数据空洞；可回放为 `oi_change` 非零列 | 0.5h 写脚本 + **4 周** wall clock | OKX `open_interest_history` 只回溯 ~8 小时 |
-| L2 | **Kronos-base 替换 Kronos-small**：从 5.4M 换到 20M+ 参数，验证模型容量是不是瓶颈 | 同数据上 `val_ce` 降 > 0.05 或 h30 IC +0.01 | 3-4h 训练 + 回测 | — |
-| L3 | **接入 Coinglass / 第三方数据**：拿到 > 90 天的 funding + OI 历史，突破 OKX API 限制 | 能跑 Top100 × 1yr 的 funding/OI 训练集 | 付费 + 1-2d adapter 开发 | 预算 + 数据源选型 |
-| L4 | **A 股分钟级**：在 A 股日线跑不出 alpha 的情况下，试 1min / 5min 频率 | 至少一个 test 区有 h5 rank-IC > +0.02 | 0.5d 采集 + 2h 训练 | akshare 分钟历史深度有限 |
-
-### 不做 / 明确放弃的方向
-
-- **方案 B（重训 Tokenizer）**：成本 ¥2-5k、丢掉 NeoQuasar 预训练权重、还要重新走一遍 Phase 2 架构约束讨论。在方案 A 还没把所有 slot 填满、pad 还没占完之前，不考虑做这个。
-- **再起新的"加一个市场 adapter"需求**（比如外汇 / 黄金）：目前两个 market adapter 已经把 32 维 EXOG schema 的边界问题暴露得比较清楚；先把加密永续这一条跑稳再开新线。
-
-> 进度在 [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md) 结尾"next steps"一节和 [TUNING_PLAYBOOK.md](docs/TUNING_PLAYBOOK.md) §8.2 同步更新，完成的条目划掉并标 commit SHA。
+这样 README 只回答“项目是什么、怎么开始、现状如何”，不再承载详细研究计划。
 
 ---
 
-## 📚 文档索引
+## 📚 文档入口
 
-| 文档 | 说明 |
+完整文档地图见 [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md)。这里保留最常用入口：
+
+| 文档 | 作用 |
 |---|---|
-| [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | 术语速查 —— K 线 / Transformer / IC / 分位回归，带例子解释。**第一次接触这些名词先看这里** |
-| [`docs/TUNING_PLAYBOOK.md`](docs/TUNING_PLAYBOOK.md) | 调参手册 v1→v2，训练/回测常见坑 |
-| [`docs/BACKTEST_IC_GUIDE.md`](docs/BACKTEST_IC_GUIDE.md) | IC 回测的 bucket / stride / horizon 怎么选，常见误读案例 |
-| [`docs/AUTODL_GUIDE.md`](docs/AUTODL_GUIDE.md) | 本地 Mac → AutoDL 云端 GPU 的完整租卡训练流程 |
-| [`docs/CRYPTO_GUIDE.md`](docs/CRYPTO_GUIDE.md) | 加密货币数据层、OKX/Binance/Binance-Vision 配置、交易所扩展指南 |
-| [`docs/CRYPTO_BTC_ETH_RUN.md`](docs/CRYPTO_BTC_ETH_RUN.md) | BTC+ETH 1min 端到端跑通记录（2026-04-17）|
-| [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | Binance Spot Top100 1min 端到端跑通记录（2026-04-20）|
-| [`docs/CRYPTO_PERP_PLAN.md`](docs/CRYPTO_PERP_PLAN.md) | OKX 永续多通道（funding/OI/basis）改造方案 |
-| [`docs/CRYPTO_PERP_TOP10_30D.md`](docs/CRYPTO_PERP_TOP10_30D.md) | OKX Top10 30d perp run + post-mortem（2026-04-20）|
-| [`docs/CRYPTO_TOKENIZER_RUN.md`](docs/CRYPTO_TOKENIZER_RUN.md) | 历史 tokenizer run 记录（当时目标 repo 为 `Kairos-base-crypto`） |
-| [`AGENTS.md`](AGENTS.md) | 仓库操作手册（给 AI agent 和人类协作者看） |
+| [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) | 按任务和角色找文档，解决“我现在该看哪篇” |
+| [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) | 术语、指标、核心概念的统一解释 |
+| [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) | 本地开发 + 远端 GPU 训练的标准流程 |
+| [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) | crypto 数据采集、交易所配置、代理与扩展入口 |
+| [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) | 回测参数怎么选、结果怎么读、哪些指标不能误用 |
+| [docs/TRAINING_TUNING_PLAYBOOK.md](docs/TRAINING_TUNING_PLAYBOOK.md) | 训练调参、常见坑、修复思路和经验总结 |
+| [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) | 当前研究路线图和下一步计划 |
+| [AGENTS.md](AGENTS.md) | 仓库操作规则，主要给 AI coding agent 用 |
 
 ---
 
@@ -439,16 +426,18 @@ Kairos/
 ├── AGENTS.md                         ← AI coding agent 的仓库操作手册
 ├── .env.example                      ← 环境变量模板（API key / proxy / HF）
 ├── docs/
-│   ├── GLOSSARY.md                   ← 术语速查（新手先看这个）
-│   ├── TUNING_PLAYBOOK.md            ← 调参手册 v1→v2 + 训练/回测常见坑
-│   ├── BACKTEST_IC_GUIDE.md          ← IC 回测 bucket/stride/horizon 怎么选
-│   ├── AUTODL_GUIDE.md               ← AutoDL 租卡训练端到端流程
-│   ├── CRYPTO_GUIDE.md               ← 加密货币数据层 & 交易所扩展指南
-│   ├── CRYPTO_BTC_ETH_RUN.md         ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
-│   ├── CRYPTO_TOP100_RUN.md          ← Binance Spot Top100 1min 跑通记录 (2026-04-20)
-│   ├── CRYPTO_PERP_PLAN.md           ← OKX 永续多通道（funding/OI/basis）改造方案
-│   ├── CRYPTO_PERP_TOP10_30D.md      ← OKX Top10 30d perp run + post-mortem
-│   └── CRYPTO_TOKENIZER_RUN.md       ← 历史 tokenizer 微调 run 记录
+│   ├── DOCUMENTATION_INDEX.md                 ← 文档导航：按任务和角色找文档
+│   ├── PROJECT_ROADMAP_AND_NEXT_STEPS.md     ← 当前研究路线图、优先级、验收标准
+│   ├── CONCEPTS_AND_GLOSSARY.md              ← 术语和概念统一说明
+│   ├── TRAINING_TUNING_PLAYBOOK.md           ← 训练调参与故障排查手册
+│   ├── BACKTEST_IC_INTERPRETATION_GUIDE.md   ← IC / Rank-IC / ICIR 的配置与解读指南
+│   ├── AUTODL_REMOTE_TRAINING_GUIDE.md       ← 远端 GPU 训练与回传流程
+│   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md ← crypto 数据源、交易所和网络配置指南
+│   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md         ← BTC+ETH 2 年现货 predictor 实验记录
+│   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md          ← Top100 1 年现货 predictor 实验记录
+│   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md  ← OKX 永续多通道改造方案
+│   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md ← OKX 永续 Top10 30 天实验复盘
+│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md       ← BTC+ETH tokenizer 微调与评测记录
 ├── kairos/                           ← Python 包（唯一 import 入口）
 │   ├── __init__.py                   ← 顶层 re-export
 │   ├── data/

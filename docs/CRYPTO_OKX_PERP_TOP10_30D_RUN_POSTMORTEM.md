@@ -1,15 +1,15 @@
-# Crypto OKX 永续 Top10 × 30d 端到端跑通记录（含 post-mortem）
+# Crypto OKX 永续 Top10 30 天实验复盘
 
-> 在 [`CRYPTO_TOP100_RUN.md`](CRYPTO_TOP100_RUN.md) 的现货 baseline 之上，**首次** 把数据源换到 **OKX 永续** 拿到真实非零的 `funding_rate` 和 `basis`，验证多通道改造（[`CRYPTO_PERP_PLAN.md`](CRYPTO_PERP_PLAN.md)）的端到端链路。
+> 在 [`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md) 的现货 baseline 之上，**首次** 把数据源换到 **OKX 永续** 拿到真实非零的 `funding_rate` 和 `basis`，验证多通道改造（[`CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md)）的端到端链路。
 >
 > **结论先放**：链路打通了（采集 → 打包 → 训练 → 回测全部跑完），**但训练效果是负迁移**——finetuned 在 pooled IC 上反而比 baseline（Kronos 原权重 + 随机 head）差。诊断已查清，三条 root cause 见 §8。本文档的主要价值是把**所有踩到的坑和诊断方法**留下来，避免再耗一次 GPU 时间。
 >
 > 相关文档：
-> - [`CRYPTO_PERP_PLAN.md`](CRYPTO_PERP_PLAN.md) — 永续多通道改造的总体方案（funding / OI / basis）
-> - [`CRYPTO_BTC_ETH_RUN.md`](CRYPTO_BTC_ETH_RUN.md) — 现货 BTC+ETH 2 年 baseline
-> - [`CRYPTO_TOP100_RUN.md`](CRYPTO_TOP100_RUN.md) — 现货 Binance Top100 1 年 baseline
-> - [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) — bucket / aggregation / stride / horizon 怎么选
-> - [`AUTODL_GUIDE.md`](AUTODL_GUIDE.md) — AutoDL 通用租卡训练手册
+> - [`CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md) — 永续多通道改造的总体方案（funding / OI / basis）
+> - [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) — 现货 BTC+ETH 2 年 baseline
+> - [`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md) — 现货 Binance Top100 1 年 baseline
+> - [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) — bucket / aggregation / stride / horizon 怎么选
+> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 通用租卡训练手册
 
 ---
 
@@ -17,7 +17,7 @@
 
 - **日期**：2026-04-20
 - **动机**：BTC/ETH 和 Top100 两次现货 run 都因为 `binance_vision` 镜像没有衍生品因子，`funding_rate / oi_change / basis / btc_dominance` 四列被 pad 为 0，模型只能用 24 维通用因子学。本次想验证：**有了真实非零的 funding 和 basis，h1/h5 短 horizon 的 IC 能不能也起来**？
-- **路线选择**：[`CRYPTO_PERP_PLAN.md`](CRYPTO_PERP_PLAN.md) 里的"路线 A — AutoDL 隧道到机场，用 OKX 永续"。
+- **路线选择**：[`CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md) 里的"路线 A — AutoDL 隧道到机场，用 OKX 永续"。
 - **数据源**：`api.okx.com` 永续 + 现货（拿 basis），通过 mihomo (Clash Meta) + 机场订阅打通。
 - **机器**：沿用同一台 AutoDL RTX 5090（`connect.westd.seetacloud.com:37667`）。
 
@@ -27,7 +27,7 @@
 
 | 时间 | 计划 | 触发原因 |
 |---|---|---|
-| 11:30 | Top100 × 90 天（funding 覆盖极限） | 走 [`CRYPTO_PERP_PLAN.md`](CRYPTO_PERP_PLAN.md) Phase 6 |
+| 11:30 | Top100 × 90 天（funding 覆盖极限） | 走 [`CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md) Phase 6 |
 | 14:00 | 用户改：Top10 × 1 年 | 想先小规模快速验证链路 |
 | 16:00 | 进一步改：**Top10 × 最近 30 天** | 1 年的 funding 数据 OKX 只回填 90 天，对**"用 funding 当 exog"**意义不大；30 天里 funding 覆盖率最高 |
 
@@ -35,7 +35,7 @@
 
 ## 1. Universe 选择
 
-OKX 永续 24h 成交量 Top10（按 `baseVolume × last × contractSize` 排序，**不**用 `quoteVolume` —— meme 币的合约张数会把 quoteVolume 灌水，详见 [`CRYPTO_GUIDE.md`](CRYPTO_GUIDE.md)）：
+OKX 永续 24h 成交量 Top10（按 `baseVolume × last × contractSize` 排序，**不**用 `quoteVolume` —— meme 币的合约张数会把 quoteVolume 灌水，详见 [`CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md`](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)）：
 
 ```
 BLUR/USDT:USDT  BTC/USDT:USDT   DOGE/USDT:USDT  ETH/USDT:USDT
@@ -90,7 +90,7 @@ US 节点实测最快（~1.1s/req），HK 在 0.8s 但不稳，DE 1.8s+。
 | `/api/v5/public/funding-rate-history` | **最近 ~90 天**（更老返回空） | 训练窗口超过 90 天，funding 列前段全 0 |
 | `/api/v5/rubik/stat/contracts/open-interest-history` | **最近 ~8 小时**（100 条 × 5min） | OI 历史几乎拿不到，需要实时订阅自己累积；本 run 直接接受 `oi_change=0` |
 
-详见 [`CRYPTO_PERP_PLAN.md`](CRYPTO_PERP_PLAN.md) §5 "Fallback scenarios"。
+详见 [`CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md) §5 "Fallback scenarios"。
 
 ---
 
@@ -276,7 +276,7 @@ python -u -m kairos.training.backtest_ic \
 | h30 | rank_ic (by-min) | -0.0387 | +0.0024 | +0.041 |
 | h30 | ICIR (by-min) | -0.068 | +0.011 | +0.079 |
 
-`bucket=minute` 在 10 symbols × 短 test 区下的统计性质详见 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) §3.2。
+`bucket=minute` 在 10 symbols × 短 test 区下的统计性质详见 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) §3.2。
 
 ### 7.2 date bucket（重跑后，**主参考但仍不可靠**：n=3）
 
@@ -378,7 +378,7 @@ interleave 把 4-17 ~ 4-19 切给 test，`n_dates=3`：
 - minute bucket：4035 个 bucket，但每 bucket 只 10 个样本，单 bucket IC 标准差 ~0.35，平均后 SE ~0.0055
 - 唯一可信的是 pooled IC（n=40350）
 
-**修复方向**：test 区至少给到 15 天以上（n_buckets ≥ 15），或者代码侧让 `backtest_ic` 在 `n_buckets < 10` 时强制 fallback 到 pooled 并打 warning。详见 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md)。
+**修复方向**：test 区至少给到 15 天以上（n_buckets ≥ 15），或者代码侧让 `backtest_ic` 在 `n_buckets < 10` 时强制 fallback 到 pooled 并打 warning。详见 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md)。
 
 ---
 
@@ -411,7 +411,7 @@ Kairos/
     └── run_top10_date.sh / top10_date.log            date bucket 重跑
 ```
 
-> ⚠️ **Top100 的 ckpt 已被本次覆盖**。如果想重新基于 Top100 ckpt 比较，需要重跑 §6 of [`CRYPTO_TOP100_RUN.md`](CRYPTO_TOP100_RUN.md)，或者从下一次 run 开始养成 `cp best_model best_model_<run-name>_backup` 的习惯。
+> ⚠️ **Top100 的 ckpt 已被本次覆盖**。如果想重新基于 Top100 ckpt 比较，需要重跑 §6 of [`CRYPTO_TOP100_1Y_SPOT_RUN.md`](CRYPTO_TOP100_1Y_SPOT_RUN.md)，或者从下一次 run 开始养成 `cp best_model best_model_<run-name>_backup` 的习惯。
 
 ---
 
@@ -440,7 +440,7 @@ python -u -m kairos.training.backtest_ic \
 
 ### 10.2 类似 sanity 检查应该作为发布前的固定步骤
 
-下次每次大改完 `train_predictor.py` / `backtest_ic.py` / `kronos_ext.py`，都跑一遍这个："finetuned BTC/ETH ckpt + finetuned BTC/ETH 数据 + horizon 1,5,30 + date bucket"，跟历史结果对一下。详见 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) §5。
+下次每次大改完 `train_predictor.py` / `backtest_ic.py` / `kronos_ext.py`，都跑一遍这个："finetuned BTC/ETH ckpt + finetuned BTC/ETH 数据 + horizon 1,5,30 + date bucket"，跟历史结果对一下。详见 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) §5。
 
 ---
 

@@ -124,7 +124,7 @@ def _tokenizer_card_parts(raw: str) -> dict[str, str]:
                 "## Training recipe\n\n"
                 "Full command log, evaluation commands, pitfalls and the "
                 "reproduction checklist are in "
-                "[`docs/CRYPTO_TOKENIZER_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_TOKENIZER_RUN.md)."
+                "[`docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_BTC_ETH_TOKENIZER_RUN.md)."
             ),
         }
 
@@ -190,7 +190,7 @@ def _predictor_card_parts(raw: str, tok_repo: str, base_model_name: str) -> dict
                 "## Training recipe\n\n"
                 "Full command log, backtest commands, pitfalls and the reproduction "
                 "checklist are in "
-                "[`docs/CRYPTO_BTC_ETH_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_BTC_ETH_RUN.md)."
+                "[`docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_BTC_ETH_2Y_SPOT_RUN.md)."
             ),
         }
 

@@ -1,4 +1,4 @@
-# Crypto 永续多通道数据计划书（Phase 1）
+# Crypto OKX 永续多通道改造计划
 
 > **状态**：草稿 / 待 review
 > **目的**：让 `--market crypto` 真正利用 funding / OI / basis，彻底解锁 `MARKET_EXOG_COLS` 的 5 个"数据驱动"位。
@@ -8,7 +8,7 @@
 
 ## 0. 动机 — 为什么必须改
 
-CRYPTO_TOP100_RUN.md §11 的 h30 结果很亮（ICIR 0.454），但 h1/h5 翻负。
+CRYPTO_TOP100_1Y_SPOT_RUN.md §11 的 h30 结果很亮（ICIR 0.454），但 h1/h5 翻负。
 排查后发现根因 = **EXOG 的 5 个数据驱动位 (`funding_rate`, `funding_rate_z`, `oi_change`, `basis`, `btc_dominance`) 在任何现有 run 里都永远是 0**。
 
 原因：

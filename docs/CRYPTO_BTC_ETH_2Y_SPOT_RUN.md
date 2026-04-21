@@ -1,12 +1,12 @@
-# Crypto BTC/ETH 端到端跑通记录
+# Crypto BTC/ETH 两年现货 Predictor 实验记录
 
 > 记录一次**完全从零**在 AutoDL RTX 5090 上完成"采数据 → 打包 → 微调 → 回测"的完整流程，连同踩到的坑和修复。
 > 如果你只想复现结果，跳到 §10 的 TL;DR 命令清单。
 >
 > 相关文档：
-> - [`AUTODL_GUIDE.md`](AUTODL_GUIDE.md) — AutoDL 通用租卡训练手册
-> - [`CRYPTO_GUIDE.md`](CRYPTO_GUIDE.md) — crypto 数据层与交易所扩展
-> - [`TUNING_PLAYBOOK.md`](TUNING_PLAYBOOK.md) — 调参手册
+> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 通用租卡训练手册
+> - [`CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md`](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) — crypto 数据层与交易所扩展
+> - [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) — 调参手册
 
 ---
 
@@ -140,7 +140,7 @@ kairos-prepare --market crypto \
     --out ./finetune/data/crypto_1min_btc_eth
 ```
 
-> `--split-mode interleave --block-days 7` 是给高频数据准的：按 7 天为一块轮流切到 train / val，既保留了时序结构又避免 val 集整段落在某一种 regime 上。参考 AGENTS.md §8 和 `TUNING_PLAYBOOK.md`。
+> `--split-mode interleave --block-days 7` 是给高频数据准的：按 7 天为一块轮流切到 train / val，既保留了时序结构又避免 val 集整段落在某一种 regime 上。参考 AGENTS.md §8 和 `TRAINING_TUNING_PLAYBOOK.md`。
 
 ### 产出
 
@@ -436,4 +436,4 @@ python -m kairos.training.backtest_ic \
 3. **换 Kronos-base / Kronos-large**（参数量 × 10-50）→ h30 的 rank-IC 有望进 0.1+；算力成本也只是 × 3-5。
 4. **学习率 sweep**：配合 `44cd5d6` 引入的 env override，一行 `for lr in 1e-6 5e-6 1e-5; do KAIROS_LR=$lr ...; done` 就能跑 3 组。
 
-走到 3. 还没见效的话，再怀疑 return head 的监督信号设计（见 `TUNING_PLAYBOOK.md`）。
+走到 3. 还没见效的话，再怀疑 return head 的监督信号设计（见 `TRAINING_TUNING_PLAYBOOK.md`）。

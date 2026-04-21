@@ -1,10 +1,10 @@
-# Kronos A股调优完整手册（数据 → 训练 → 部署 → HF → 推理）
+# Kairos 训练调参与故障排查手册
 
 > 面向完全没有 Transformer 调优经验的读者。每一步都给出"为什么这么做 / 具体命令 / 常见坑"。
 >
-> 📖 **读不懂术语？** 先去 [GLOSSARY.md](GLOSSARY.md) 查 IC、Rank-IC、过拟合、分布偏移、早停、teacher forcing 等词的意思。
+> 📖 **读不懂术语？** 先去 [CONCEPTS_AND_GLOSSARY.md](CONCEPTS_AND_GLOSSARY.md) 查 IC、Rank-IC、过拟合、分布偏移、早停、teacher forcing 等词的意思。
 >
-> 🪙 **要做加密市场？** 本手册聚焦 A 股；加密版的数据采集、预设超参、训练入口见 [CRYPTO_GUIDE.md](CRYPTO_GUIDE.md)。核心超参之外的配置（`market=crypto`、`freq=1min`、`lookback=256`、`return_horizon=30`）都走 `kairos.training.config.preset_for("crypto-1min")`。
+> 🪙 **要做加密市场？** 本手册聚焦 A 股；加密版的数据采集、预设超参、训练入口见 [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)。核心超参之外的配置（`market=crypto`、`freq=1min`、`lookback=256`、`return_horizon=30`）都走 `kairos.training.config.preset_for("crypto-1min")`。
 >
 > 配套脚本已放在：
 >
@@ -437,20 +437,20 @@ print(pred)
 5. **正则化**：Kronos 在单只股票窗口内做 z-score，**不要**全市场一起标准化。
 6. **信号到交易**：预测的 `close` 不是 alpha。计算 `(pred_close_{t+h} / last_close - 1)` 做 cross-sectional 排序才是正常姿势。
 
-### 8.2 训练 / 回测侧（从 [`CRYPTO_PERP_TOP10_30D.md`](CRYPTO_PERP_TOP10_30D.md) post-mortem 沉淀）
+### 8.2 训练 / 回测侧（从 [`CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) post-mortem 沉淀）
 
 7. **`KAIROS_N_TRAIN_ITER` 残留 → 静默欠拟合**。
    - `n_train_iter` 是**每 epoch 抽多少个样本**（不是 step 数），default 50000，mini run 时常被设到 5000 验证链路。
-   - 正式 run 前**务必**清掉 env，否则会出现 "看着 val_ce 一直降但只降 0.006" 的欠拟合假象。本仓库的 [Top10 30d perp run](CRYPTO_PERP_TOP10_30D.md) 就是因为这个变成了负迁移。
+   - 正式 run 前**务必**清掉 env，否则会出现 "看着 val_ce 一直降但只降 0.006" 的欠拟合假象。本仓库的 [Top10 30d perp run](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md) 就是因为这个变成了负迁移。
    - 自检：训练 log 里 `[TRAIN] pool=X, using Y/epoch.` —— `Y/X < 5%` 就需要警惕。
 8. **训练 target 是 normalized close 的 cumulative diff，回测真值是 raw log-return**（量纲不一致）。
    - `train_predictor.py` 的 pinball target 是 `close_n[t+k+1] - close_n[t]` (k=0..29)，cumulative diff 量纲随 k 线性增大 → k=29 主导整个 loss → 模型只学了 horizon=`return_horizon` 这一档。
-   - 这能解释为什么所有 crypto-1min run（[BTC/ETH](CRYPTO_BTC_ETH_RUN.md)、[Top100](CRYPTO_TOP100_RUN.md)、[Top10 perp](CRYPTO_PERP_TOP10_30D.md)）的 h1 / h5 都不动甚至反向，只有 h30 有效。
-   - 修复方向：raw log-return + per-k normalization，或多 horizon head（多任务）。改完务必跑 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) §5.3 的 sanity regression。
+   - 这能解释为什么所有 crypto-1min run（[BTC/ETH](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md)、[Top100](CRYPTO_TOP100_1Y_SPOT_RUN.md)、[Top10 perp](CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md)）的 h1 / h5 都不动甚至反向，只有 h30 有效。
+   - 修复方向：raw log-return + per-k normalization，或多 horizon head（多任务）。改完务必跑 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) §5.3 的 sanity regression。
 9. **`backtest_ic --aggregation` 选错会让结果完全没意义**。
    - `auto` 当前永远走 `date`，对 test 区 < 5 天的数据集会算出 `n_dates < 5` 的 ICIR（=噪声）。
-   - 短 test 区只看 `--aggregation none` 的 `overall.spearman`；详见 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) §2 决策树。
-10. **看 IC 必须看 baseline 对照**。Kronos 原权重 + 随机 head 在 pooled 上经常 |IC| > 0.02，看 finetuned 绝对 IC 没意义，必须看 Δ。详见 [`BACKTEST_IC_GUIDE.md`](BACKTEST_IC_GUIDE.md) §5。
+   - 短 test 区只看 `--aggregation none` 的 `overall.spearman`；详见 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) §2 决策树。
+10. **看 IC 必须看 baseline 对照**。Kronos 原权重 + 随机 head 在 pooled 上经常 |IC| > 0.02，看 finetuned 绝对 IC 没意义，必须看 Δ。详见 [`BACKTEST_IC_INTERPRETATION_GUIDE.md`](BACKTEST_IC_INTERPRETATION_GUIDE.md) §5。
 
 ---
 

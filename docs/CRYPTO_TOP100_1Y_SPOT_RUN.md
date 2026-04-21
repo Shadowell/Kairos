@@ -1,13 +1,13 @@
-# Crypto Binance-Spot Top100 端到端跑通记录
+# Crypto Top100 一年现货 Predictor 实验记录
 
-> 在 [`CRYPTO_BTC_ETH_RUN.md`](CRYPTO_BTC_ETH_RUN.md) 的 2 币 × 2 年基线上，把 universe 扩到 **Binance 现货 24h 成交量 Top100**（~100 个 USDT 对）× **近 1 年 1min**，看扩大数据量对微调效果的影响。
+> 在 [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) 的 2 币 × 2 年基线上，把 universe 扩到 **Binance 现货 24h 成交量 Top100**（~100 个 USDT 对）× **近 1 年 1min**，看扩大数据量对微调效果的影响。
 > 如果你只想复现结果，跳到 §10 的 TL;DR 命令清单。
 >
 > 相关文档：
-> - [`CRYPTO_BTC_ETH_RUN.md`](CRYPTO_BTC_ETH_RUN.md) — 上一版 BTC+ETH 2 币跑通记录（必读，这里只讲差异）
-> - [`AUTODL_GUIDE.md`](AUTODL_GUIDE.md) — AutoDL 通用租卡训练手册
-> - [`CRYPTO_GUIDE.md`](CRYPTO_GUIDE.md) — crypto 数据层与交易所扩展
-> - [`TUNING_PLAYBOOK.md`](TUNING_PLAYBOOK.md) — 调参手册
+> - [`CRYPTO_BTC_ETH_2Y_SPOT_RUN.md`](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md) — 上一版 BTC+ETH 2 币跑通记录（必读，这里只讲差异）
+> - [`AUTODL_REMOTE_TRAINING_GUIDE.md`](AUTODL_REMOTE_TRAINING_GUIDE.md) — AutoDL 通用租卡训练手册
+> - [`CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md`](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) — crypto 数据层与交易所扩展
+> - [`TRAINING_TUNING_PLAYBOOK.md`](TRAINING_TUNING_PLAYBOOK.md) — 调参手册
 
 ---
 
@@ -18,7 +18,7 @@
   1. 更大 train pool 能不能在 val_ce 上反映出来；
   2. 扩到横截面后 by-date IC / ICIR 是不是更稳；
   3. h1 / h5 段能不能因为更多币种采样而抬起来。
-- **机器**：沿用 `CRYPTO_BTC_ETH_RUN.md` 的同一台 AutoDL RTX 5090（`connect.westd.seetacloud.com:37667`，westd 区）。
+- **机器**：沿用 `CRYPTO_BTC_ETH_2Y_SPOT_RUN.md` 的同一台 AutoDL RTX 5090（`connect.westd.seetacloud.com:37667`，westd 区）。
 - **数据源**：依然走 `binance_vision`（公司网络下唯一稳定能通的 crypto endpoint）。衍生品因子 funding / OI / basis 仍旧 pad 0。
 
 ---
@@ -306,7 +306,7 @@ nohup bash logs/run_backtest_top100.sh > logs/backtest_top100.log 2>&1 &
    - pearson / rank-IC / by-date IC / ICIR 四个独立指标**同向**显示负相关，p-value 全部 < 1e-14。
    - 量级（by-date IC ≈ −0.012）虽小但显著——说明模型在 short-horizon 上确实学到了什么，只是方向错。
    - 换句话说，**模型把可解释方差都挤到了 h30，把 h1/h5 当成了 h30 的"反向预警"**。对应 preset `return_horizon=30` 就是 h30 对齐训练目标，短 horizon 等于让模型外推一个它没被监督的任务。
-   - 实际用的时候可以只订阅 h30 信号，或者给 h1/h5 额外加一个 return head（多 head / 多 horizon 训练，见 TUNING_PLAYBOOK.md）。
+   - 实际用的时候可以只订阅 h30 信号，或者给 h1/h5 额外加一个 return head（多 head / 多 horizon 训练，见 TRAINING_TUNING_PLAYBOOK.md）。
 
 3. **Baseline 的 h1 ICIR +0.42 不是真 alpha**。
    - baseline = Kronos 原权重 + 随机初始化的 exog / return head，return head 输出的就是乱的。
