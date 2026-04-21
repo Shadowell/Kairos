@@ -26,15 +26,17 @@
 
 ### 加密货币 1-min 微调
 
-**三次 run 的 h30 对比**（horizon 对齐 preset `return_horizon=30`；硬件：单卡 RTX 5090）：
+**四次 run 的 h30 对比**（horizon 对齐 preset `return_horizon=30`；硬件：单卡 RTX 5090）：
 
 | run | universe | 训练区间 | test 样本 | rank-IC (baseline → finetuned) | **ICIR (baseline → finetuned)** | hit_rate | 详情 |
 |---|---|---|---|---|---|---|---|
 | 2026-04-17 | BTC + ETH（2 币） | 2024-01 ~ 2026-04 | 30 万 | +0.018 → **+0.050** | +0.039 → **+0.325** | 51.7% | [CRYPTO_BTC_ETH_RUN.md](docs/CRYPTO_BTC_ETH_RUN.md) |
 | 2026-04-20 | Binance Spot Top100（100 币） | 2025-04 ~ 2026-04 | 110 万 | +0.000 → **+0.030** | −0.084 → **+0.454** | 49.2% | [CRYPTO_TOP100_RUN.md](docs/CRYPTO_TOP100_RUN.md) |
+| 2026-04-21 | BTC + ETH（2 币，`Kronos-base`） | 2024-01 ~ 2026-04 | 30 万 | +0.055 → **+0.076** | +0.325 → **+0.484** | 52.9% | [Shadowell/Kairos-base-crypto](https://huggingface.co/Shadowell/Kairos-base-crypto) |
 | 2026-04-20 ⚠️ | OKX **永续 Top10**（首次拿到真实 funding/basis） | 2026-03-21 ~ 2026-04-17（30d） | 4 万 | +0.008 → +0.016 (n=3 噪声) | +1.17 → +0.06 (n=3 噪声) | 50.9% | [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md)（**post-mortem**）|
 
 - **ICIR 从 0.325 再抬到 0.454**（+40%）—— Top100 把信号的稳定性推过 0.4 线；对组合化使用是最看重的指标。
+- **`Kronos-base` 在同一套 BTC/ETH 数据上继续抬升到 `rank-IC=+0.076 / ICIR=+0.484`**，说明当前瓶颈不只是 universe，模型容量本身也在起作用。
 - rank-IC 绝对值从 5% 掉到 3%：Top100 里很多小币的 30-min 方向性弱于 BTC/ETH，单券方向 alpha 被稀释，横截面相对强弱 alpha 更凸显。
 - **h1 / h5 两次 run 结果都不理想**：binance_vision 镜像没有 funding / OI / basis，短 horizon 最吃的微观因子被 pad 为 0；Top100 run 里 h1/h5 甚至被模型学成反向信号，详见 CRYPTO_TOP100_RUN.md §7.5。修正方向见文档 §11。
 - **永续 Top10 30d run（⚠️）链路打通了**——首次把 OKX 真实非零 `funding_rate` 和 `basis` 喂进 32 维 exog；但训练效果是负迁移，root cause 是 `KAIROS_N_TRAIN_ITER=5000` 残留 + test 区只 3 天 + bucket 选错三层叠加，**代码本身没 regression**（用老数据复跑老结果通过）。完整 post-mortem 见 [CRYPTO_PERP_TOP10_30D.md](docs/CRYPTO_PERP_TOP10_30D.md)，也能当 "怎么读 IC 报告" 的反面教材；正面教材是 [BACKTEST_IC_GUIDE.md](docs/BACKTEST_IC_GUIDE.md)。
@@ -256,7 +258,7 @@ huggingface-cli login   # 或 export HF_TOKEN=...
 # 5.1 只推 tokenizer
 kairos-push-hf \
     --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
-    --repo-tokenizer Shadowell/Kairos-base-crypto \
+    --repo-tokenizer your-user/Kronos-Tokenizer-crypto \
     --market-tag crypto \
     --metrics-file artifacts/tokenizer_eval_summary.md
 
