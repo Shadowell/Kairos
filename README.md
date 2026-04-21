@@ -168,6 +168,36 @@ flowchart LR
 - `s1_logits`, `s2_logits`：下一个 token 的概率分布，用来生成 / 解码未来 K 线 bar
 - `quantiles`：未来收益分位数，用来做 `h30` 这类回测信号
 
+### 为什么要拆成 `s1` 和 `s2`
+
+`s1/s2` 不是两次重复预测，而是**分层量化**：
+
+- `s1`：先决定 bar 的**粗结构**，例如大致的价格区间、波动级别、量价形态
+- `s2`：在 `s1` 已经确定后，再补**细节残差**
+
+这样做比“一次性预测一个超大 vocab”更容易训练：
+
+- 先做粗分类，再做细分类，分类空间更小
+- `s2` 明确条件在 `s1` 上，建模难度更低
+- 只用 `s1` 就能得到一个较粗的重构，`s1+s2` 合起来才是完整 bar
+
+```mermaid
+flowchart LR
+    A["未来一根 bar"] --> B["粗编码 s1<br/>先决定大轮廓"]
+    A --> C["细编码 s2<br/>补充残差和细节"]
+    B --> D["例如<br/>大阳线 / 小阴线 / 窄波动"]
+    C --> E["例如<br/>上影更长一点<br/>close 更靠近 high<br/>volume 更高一点"]
+    B --> F["只用 s1 decode<br/>得到粗重构"]
+    C --> G["s1 + s2 一起 decode<br/>得到完整 6 维 bar"]
+```
+
+可以把它理解成：
+
+- `s1` 像先回答“这根 bar 大概是哪一类”
+- `s2` 再回答“这一类里面具体是哪一种”
+
+这样 predictor 不需要一次性在一个极大的离散空间里盲猜，而是先抓主结构，再补细节。
+
 32 维 `EXOG_COLS` 的具体构成（代码在 [`kairos/data/common_features.py`](kairos/data/common_features.py) 和 `kairos/data/markets/<name>.py`）：
 
 | 分组 | 维度 | 列名（节选） |
