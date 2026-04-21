@@ -65,7 +65,11 @@ pipeline_tag: time-series-forecasting
 
 # {repo}
 
-{desc}
+{predictor_intro}
+
+{predictor_notes}
+
+{metrics_block}
 
 ## Usage
 
@@ -74,6 +78,10 @@ from kairos import KronosTokenizer, {cls}
 tok = KronosTokenizer.from_pretrained("{tok_repo}")
 model = {cls}.from_pretrained("{repo}")
 ```
+
+{training_block}
+
+{recipe_block}
 """
 
 
@@ -132,6 +140,61 @@ def _tokenizer_card_parts(raw: str) -> dict[str, str]:
             "are used for training; the 32-dim exogenous channel required by "
             "`KronosWithExogenous` is not needed for the tokenizer itself."
         ),
+        "training_block": "## Training config\n\nSee the upstream Kairos repo for the market-specific preset used for this run.",
+        "recipe_block": (
+            "## Training recipe\n\n"
+            "See the corresponding training doc in the upstream "
+            "[Kairos](https://github.com/Shadowell/Kairos) repo for the full "
+            "reproduction checklist."
+        ),
+    }
+
+
+def _predictor_card_parts(raw: str, tok_repo: str) -> dict[str, str]:
+    raw = (raw or "").strip().lower()
+    if raw == "crypto":
+        tokenizer_note = (
+            "This run keeps the original tokenizer "
+            "[`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base), "
+            "matching the original `Kairos-small-crypto` training flow."
+            if tok_repo == "NeoQuasar/Kronos-Tokenizer-base"
+            else
+            "This version uses the fine-tuned tokenizer "
+            f"[`{tok_repo}`](https://huggingface.co/{tok_repo}) instead of the "
+            "original `NeoQuasar/Kronos-Tokenizer-base`."
+        )
+        return {
+            "predictor_intro": (
+                "Fine-tuned **Kronos-small** on BTC/USDT + ETH/USDT 1-min K-lines "
+                "(2024-01 ~ 2026-04) using "
+                "**[Kairos](https://github.com/Shadowell/Kairos)**.\n"
+                "Architecture = Kronos + exogenous bypass channel (32-d) + quantile return head."
+            ),
+            "predictor_notes": (
+                f"{tokenizer_note} Training data comes "
+                "from the public Binance Vision spot mirror, so the 5 crypto-native "
+                "exogenous features (`funding_rate` / `funding_rate_z` / "
+                "`oi_change` / `basis` / `btc_dominance`) remain padded to zero; "
+                "the other 27 dimensions are real."
+            ),
+            "training_block": f"""## Training config (preset `crypto-1min`)
+
+- lookback 256 min, predict 30 min
+- batch 50, OneCycleLR, early-stop patience 3
+- progressive unfreeze: only last transformer block + exog bypass + return head
+- tokenizer source = `{tok_repo}`
+- 32-d EXOG = 24 common + 8 crypto-market features""",
+            "recipe_block": (
+                "## Training recipe\n\n"
+                "Full command log, backtest commands, pitfalls and the reproduction "
+                "checklist are in "
+                "[`docs/CRYPTO_BTC_ETH_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_BTC_ETH_RUN.md)."
+            ),
+        }
+
+    return {
+        "predictor_intro": "Fine-tuned Kronos predictor.",
+        "predictor_notes": "",
         "training_block": "## Training config\n\nSee the upstream Kairos repo for the market-specific preset used for this run.",
         "recipe_block": (
             "## Training recipe\n\n"
@@ -235,12 +298,18 @@ def main():
         print(f"        OK n_layers={model.n_layers} d_model={model.d_model}")
 
         tok_repo = args.repo_tokenizer or "NeoQuasar/Kronos-Tokenizer-base"
+        pred_card_parts = _predictor_card_parts(args.market_tag, tok_repo)
         card = CARD_PREDICTOR_TMPL.format(
             repo=args.repo_predictor,
             tok_repo=tok_repo,
             market_tag=market_tag,
             desc=desc,
             cls="KronosWithExogenous" if args.predictor_class == "ext" else "Kronos",
+            predictor_intro=pred_card_parts["predictor_intro"],
+            predictor_notes=pred_card_parts["predictor_notes"],
+            metrics_block=metrics_block or "_No quantitative metrics were supplied at upload time._",
+            training_block=pred_card_parts["training_block"],
+            recipe_block=pred_card_parts["recipe_block"],
         )
         if args.dry_run:
             print("[dry-run] would push predictor → ", args.repo_predictor)

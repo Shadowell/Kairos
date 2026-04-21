@@ -100,6 +100,7 @@ def run_backtest(
     aggregation: str = "auto",
     stride: int = 1,
     per_symbol_limit: int | None = None,
+    tokenizer_path: str | None = None,
 ) -> Dict:
     device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"[device] {device_t}")
@@ -122,8 +123,12 @@ def run_backtest(
         )
     print(f"[bucket] {bucket_key} (market={cfg.market}, freq={cfg.freq})")
 
-    print(f"[load] tokenizer: {cfg.pretrained_tokenizer_path}")
-    tok = KronosTokenizer.from_pretrained(cfg.pretrained_tokenizer_path).eval().to(device_t)
+    tok_src = tokenizer_path
+    if tok_src is None:
+        tok_local = Path(cfg.save_path) / cfg.tokenizer_save_folder_name / "checkpoints" / "best_model"
+        tok_src = str(tok_local) if tok_local.exists() else cfg.pretrained_tokenizer_path
+    print(f"[load] tokenizer: {tok_src}")
+    tok = KronosTokenizer.from_pretrained(tok_src).eval().to(device_t)
 
     if use_baseline or ckpt_path is None:
         print(f"[load] baseline Kronos-small + random exog/return heads")
@@ -345,6 +350,8 @@ def main():
                          "GPU 全量回测保持默认 1）")
     ap.add_argument("--per-symbol-limit", type=int, default=0,
                     help=">0 时每个 symbol 最多评估 N 个窗口（等距抽样覆盖全区间）")
+    ap.add_argument("--tokenizer", default=None,
+                    help="override tokenizer checkpoint / repo；默认优先本地 artifacts/checkpoints/tokenizer/checkpoints/best_model")
     args = ap.parse_args()
 
     overrides: dict = {}
@@ -378,6 +385,7 @@ def main():
         aggregation=args.aggregation,
         stride=args.stride,
         per_symbol_limit=args.per_symbol_limit or None,
+        tokenizer_path=args.tokenizer,
     )
 
     out_p = Path(args.out)
