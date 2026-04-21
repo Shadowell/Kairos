@@ -45,20 +45,21 @@ Kairos/
 │   │   └── markets/              # MarketAdapter 抽象 + ashare / crypto
 │   │       └── crypto_exchanges/ # ccxt 封装：okx / binance_vision / ...
 │   ├── models/                   # KronosWithExogenous + QuantileReturnHead
-│   ├── training/                 # train_predictor / backtest_ic / dataset / config
+│   ├── training/                 # train_tokenizer / train_predictor / eval_tokenizer / backtest_ic / dataset / config
 │   ├── deploy/                   # push_to_hf / serve
 │   ├── utils/                    # training_utils 等
 │   └── vendor/                   # 第三方 vendored 代码（kronos 源码镜像）
-├── docs/                         # 全部文档（9 篇 .md）
+├── docs/                         # 全部文档（10 篇 .md）
 │   ├── GLOSSARY.md               # 术语表（新手友好）
 │   ├── TUNING_PLAYBOOK.md        # 调参手册 + 训练/回测常见坑
 │   ├── BACKTEST_IC_GUIDE.md      # IC 回测 bucket/stride/horizon 怎么选
 │   ├── AUTODL_GUIDE.md           # 远端 GPU 训练完整手册
 │   ├── CRYPTO_GUIDE.md           # 加密货币数据层 & 交易所扩展指南
-│   ├── CRYPTO_BTC_ETH_RUN.md     # BTC+ETH 2y spot run (2026-04-17)
+│   ├── CRYPTO_BTC_ETH_RUN.md     # BTC+ETH 2y spot predictor run (2026-04-17)
 │   ├── CRYPTO_TOP100_RUN.md      # Binance Spot Top100 1y run (2026-04-20)
 │   ├── CRYPTO_PERP_PLAN.md       # OKX 永续多通道改造计划书
-│   └── CRYPTO_PERP_TOP10_30D.md  # OKX Top10 30d perp run + post-mortem
+│   ├── CRYPTO_PERP_TOP10_30D.md  # OKX Top10 30d perp run + post-mortem
+│   └── CRYPTO_TOKENIZER_RUN.md   # Kronos-Tokenizer-base → Kairos-base-crypto 微调
 ├── scripts/                      # 运维 / CI 辅助脚本
 │   ├── autodl_bootstrap.sh       # AutoDL 一键初始化（venv + hf mirror + smoke）
 │   ├── package_and_upload.sh     # 打包 + scp 到 AutoDL
@@ -132,6 +133,17 @@ python -m kairos.training.backtest_ic --baseline --horizons 1,5 \
   --out artifacts/backtest_baseline.json
 python -m kairos.training.backtest_ic --ckpt artifacts/best_model --horizons 1,5 \
   --out artifacts/backtest_finetuned.json
+
+# Tokenizer 单独微调 + 评测（详见 docs/CRYPTO_TOKENIZER_RUN.md）
+torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
+python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
+  --dataset-path ./finetune/data/crypto_1min_btc_eth \
+  --out artifacts/tokenizer_eval_baseline.json
+python -m kairos.training.eval_tokenizer \
+  --ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
+  --preset crypto-1min \
+  --dataset-path ./finetune/data/crypto_1min_btc_eth \
+  --out artifacts/tokenizer_eval_finetuned.json
 ```
 
 ### Git
@@ -267,6 +279,11 @@ EOF
 | Top10 30d perp ⚠️ | 10 币 × 30 天 | +0.016 (n=3 噪声) | +0.06 | `docs/CRYPTO_PERP_TOP10_30D.md`（负迁移 post-mortem）|
 
 h30 是当前唯一有效的 horizon（preset `return_horizon=30` 对齐），h1/h5 因训练 target 量纲设计未被真正监督，IC 接近 0 或反向。改进方向见 `docs/BACKTEST_IC_GUIDE.md` §4 和 `docs/TUNING_PLAYBOOK.md` §8.2。
+
+### BSQ Tokenizer（crypto-1min, Kairos-base-crypto）
+
+当前仅完成代码 + 本地 CPU smoke（50 步 / M1 CPU / 17 s）——`recon_mse_full` 由 baseline 的 0.00557 降到 0.00518（-7%），证明链路工作。**正式 run 要在 AutoDL 上跑，完整步骤见 `docs/CRYPTO_TOKENIZER_RUN.md`**。
+Tokenizer 训练 ≈ 4M 参数、batch=50、epochs=15 + patience=3、lr=2e-4 全量解冻，预计 5090 上 5–10 min 完成。
 
 改超参时统一改 `kairos/training/config.py` 的 `TrainConfig`，不要把数字硬编码进 `train_predictor.py`。跨市场的参数组合走 `preset_for(name)`——新建市场/频率时**同步**在 `_PRESETS` 里加一条，而不是让调用方自己拼 dict。
 

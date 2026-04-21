@@ -42,6 +42,8 @@ kairos-collect = "kairos.data.collect:main"
 kairos-prepare = "kairos.data.prepare_dataset:main"
 kairos-train-tokenizer = "kairos.training.train_tokenizer:main"
 kairos-train-predictor = "kairos.training.train_predictor:main"
+kairos-eval-tokenizer = "kairos.training.eval_tokenizer:main"
+kairos-backtest-ic = "kairos.training.backtest_ic:main"
 kairos-push-hf = "kairos.deploy.push_to_hf:main"
 kairos-serve = "kairos.deploy.serve:main"
 

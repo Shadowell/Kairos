@@ -48,6 +48,7 @@
 | Hub repo | 数据 | base model | 说明 |
 |---|---|---|---|
 | [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | 上表 h30 那行的 checkpoint；tokenizer 复用上游 [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) |
+| `Shadowell/Kairos-base-crypto` 🟡 待训练 | 同上 | [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) | BSQ tokenizer 微调，全量解冻，15 epoch + patience=3；完整流程见 [CRYPTO_TOKENIZER_RUN.md](docs/CRYPTO_TOKENIZER_RUN.md) |
 
 ```python
 from kairos import KronosTokenizer
@@ -219,8 +220,16 @@ torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 KAIROS_BATCH_SIZE=32 KAIROS_LR=5e-6 \
     torchrun --standalone --nproc_per_node=1 -m kairos.training.train_predictor
 
-# 可选：先微调 Tokenizer（通常不必，直接用 NeoQuasar 官方版即可）
+# 可选：先微调 Tokenizer（通常不必，直接用 NeoQuasar 官方版即可；
+# 完整流程和评测脚本见 docs/CRYPTO_TOKENIZER_RUN.md）
 torchrun --standalone --nproc_per_node=1 -m kairos.training.train_tokenizer
+python -m kairos.training.eval_tokenizer --baseline --preset crypto-1min \
+    --dataset-path ./finetune/data/crypto_1min \
+    --out artifacts/tokenizer_eval_baseline.json
+python -m kairos.training.eval_tokenizer \
+    --ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
+    --preset crypto-1min --dataset-path ./finetune/data/crypto_1min \
+    --out artifacts/tokenizer_eval_finetuned.json
 ```
 
 ### 4. 回测对比
@@ -242,12 +251,27 @@ python -m kairos.training.backtest_ic \
 ### 5. 推到 Hugging Face
 
 ```bash
-huggingface-cli login
+huggingface-cli login   # 或 export HF_TOKEN=...
+
+# 5.1 只推 tokenizer
 kairos-push-hf \
-    --tokenizer-ckpt  ./artifacts/checkpoints/tokenizer/checkpoints/best_model \
-    --predictor-ckpt  ./artifacts/checkpoints/predictor/checkpoints/best_model \
-    --repo-tokenizer  your-user/Kronos-Tokenizer-ashare \
-    --repo-predictor  your-user/Kronos-small-ashare \
+    --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
+    --repo-tokenizer Shadowell/Kairos-base-crypto \
+    --market-tag crypto \
+    --metrics-file artifacts/tokenizer_eval_summary.md
+
+# 5.2 只推 predictor（复用上游 tokenizer）
+kairos-push-hf \
+    --predictor-ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
+    --repo-predictor your-user/Kronos-small-ashare \
+    --predictor-class ext --market-tag ashare
+
+# 5.3 一次推两个
+kairos-push-hf \
+    --tokenizer-ckpt artifacts/checkpoints/tokenizer/checkpoints/best_model \
+    --predictor-ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
+    --repo-tokenizer your-user/Kronos-Tokenizer-ashare \
+    --repo-predictor your-user/Kronos-small-ashare \
     --predictor-class ext --private
 ```
 
@@ -333,6 +357,7 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 | [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | Binance Spot Top100 1min 端到端跑通记录（2026-04-20）|
 | [`docs/CRYPTO_PERP_PLAN.md`](docs/CRYPTO_PERP_PLAN.md) | OKX 永续多通道（funding/OI/basis）改造方案 |
 | [`docs/CRYPTO_PERP_TOP10_30D.md`](docs/CRYPTO_PERP_TOP10_30D.md) | OKX Top10 30d perp run + post-mortem（2026-04-20）|
+| [`docs/CRYPTO_TOKENIZER_RUN.md`](docs/CRYPTO_TOKENIZER_RUN.md) | Kronos-Tokenizer-base → Kairos-base-crypto BSQ tokenizer 微调端到端流程 |
 | [`AGENTS.md`](AGENTS.md) | 仓库操作手册（给 AI agent 和人类协作者看） |
 
 ---
@@ -353,7 +378,8 @@ Kairos/
 │   ├── CRYPTO_BTC_ETH_RUN.md         ← BTC+ETH 1min 端到端跑通记录 (2026-04-17)
 │   ├── CRYPTO_TOP100_RUN.md          ← Binance Spot Top100 1min 跑通记录 (2026-04-20)
 │   ├── CRYPTO_PERP_PLAN.md           ← OKX 永续多通道（funding/OI/basis）改造方案
-│   └── CRYPTO_PERP_TOP10_30D.md      ← OKX Top10 30d perp run + post-mortem
+│   ├── CRYPTO_PERP_TOP10_30D.md      ← OKX Top10 30d perp run + post-mortem
+│   └── CRYPTO_TOKENIZER_RUN.md       ← Kronos-Tokenizer-base → Kairos-base-crypto 微调
 ├── kairos/                           ← Python 包（唯一 import 入口）
 │   ├── __init__.py                   ← 顶层 re-export
 │   ├── data/
