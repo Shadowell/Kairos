@@ -224,6 +224,9 @@ def main():
             raise ValueError(
                 f"{env_key}={val!r} is not a valid {caster.__name__}"
             ) from e
+    pred_override = os.environ.get("KAIROS_PRETRAINED_PREDICTOR")
+    if pred_override:
+        cfg.pretrained_predictor_path = pred_override
     if "WORLD_SIZE" not in os.environ:
         raise RuntimeError("请用 torchrun 启动此脚本")
     rank, world, local = setup_ddp()

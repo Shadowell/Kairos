@@ -48,7 +48,7 @@
 | Hub repo | 数据 | base model | 说明 |
 |---|---|---|---|
 | [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | 上表 h30 那行的 checkpoint；tokenizer 复用上游 [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) |
-| `Shadowell/Kairos-base-crypto` 🟡 待训练 | 同上 | [`NeoQuasar/Kronos-Tokenizer-base`](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) | BSQ tokenizer 微调，全量解冻，15 epoch + patience=3；完整流程见 [CRYPTO_TOKENIZER_RUN.md](docs/CRYPTO_TOKENIZER_RUN.md) |
+| [`Shadowell/Kairos-base-crypto`](https://huggingface.co/Shadowell/Kairos-base-crypto) 🟢 public | BTC/USDT + ETH/USDT 1-min, 2024-01 ~ 2026-04 | [`NeoQuasar/Kronos-base`](https://huggingface.co/NeoQuasar/Kronos-base) | `Kronos-base` predictor 微调版；官方 tokenizer；当前 h30 `rank-IC=+0.076 / ICIR=+0.484` |
 
 ```python
 from kairos import KronosTokenizer
@@ -357,7 +357,7 @@ Kairos 默认实现了**方案 A + 方案 C**，开箱即用。详见 [docs/TUNI
 | [`docs/CRYPTO_TOP100_RUN.md`](docs/CRYPTO_TOP100_RUN.md) | Binance Spot Top100 1min 端到端跑通记录（2026-04-20）|
 | [`docs/CRYPTO_PERP_PLAN.md`](docs/CRYPTO_PERP_PLAN.md) | OKX 永续多通道（funding/OI/basis）改造方案 |
 | [`docs/CRYPTO_PERP_TOP10_30D.md`](docs/CRYPTO_PERP_TOP10_30D.md) | OKX Top10 30d perp run + post-mortem（2026-04-20）|
-| [`docs/CRYPTO_TOKENIZER_RUN.md`](docs/CRYPTO_TOKENIZER_RUN.md) | Kronos-Tokenizer-base → Kairos-base-crypto BSQ tokenizer 微调端到端流程 |
+| [`docs/CRYPTO_TOKENIZER_RUN.md`](docs/CRYPTO_TOKENIZER_RUN.md) | 历史 tokenizer run 记录（当时目标 repo 为 `Kairos-base-crypto`） |
 | [`AGENTS.md`](AGENTS.md) | 仓库操作手册（给 AI agent 和人类协作者看） |
 
 ---
@@ -379,7 +379,7 @@ Kairos/
 │   ├── CRYPTO_TOP100_RUN.md          ← Binance Spot Top100 1min 跑通记录 (2026-04-20)
 │   ├── CRYPTO_PERP_PLAN.md           ← OKX 永续多通道（funding/OI/basis）改造方案
 │   ├── CRYPTO_PERP_TOP10_30D.md      ← OKX Top10 30d perp run + post-mortem
-│   └── CRYPTO_TOKENIZER_RUN.md       ← Kronos-Tokenizer-base → Kairos-base-crypto 微调
+│   └── CRYPTO_TOKENIZER_RUN.md       ← 历史 tokenizer 微调 run 记录
 ├── kairos/                           ← Python 包（唯一 import 入口）
 │   ├── __init__.py                   ← 顶层 re-export
 │   ├── data/

@@ -150,8 +150,10 @@ def _tokenizer_card_parts(raw: str) -> dict[str, str]:
     }
 
 
-def _predictor_card_parts(raw: str, tok_repo: str) -> dict[str, str]:
+def _predictor_card_parts(raw: str, tok_repo: str, base_model_name: str) -> dict[str, str]:
     raw = (raw or "").strip().lower()
+    model_label = base_model_name.rsplit("/", 1)[-1]
+    batch_hint = "24" if model_label.lower() == "kronos-base" else "50"
     if raw == "crypto":
         tokenizer_note = (
             "This run keeps the original tokenizer "
@@ -165,7 +167,7 @@ def _predictor_card_parts(raw: str, tok_repo: str) -> dict[str, str]:
         )
         return {
             "predictor_intro": (
-                "Fine-tuned **Kronos-small** on BTC/USDT + ETH/USDT 1-min K-lines "
+                f"Fine-tuned **{model_label}** on BTC/USDT + ETH/USDT 1-min K-lines "
                 "(2024-01 ~ 2026-04) using "
                 "**[Kairos](https://github.com/Shadowell/Kairos)**.\n"
                 "Architecture = Kronos + exogenous bypass channel (32-d) + quantile return head."
@@ -180,7 +182,7 @@ def _predictor_card_parts(raw: str, tok_repo: str) -> dict[str, str]:
             "training_block": f"""## Training config (preset `crypto-1min`)
 
 - lookback 256 min, predict 30 min
-- batch 50, OneCycleLR, early-stop patience 3
+- batch {batch_hint}, OneCycleLR, early-stop patience 3
 - progressive unfreeze: only last transformer block + exog bypass + return head
 - tokenizer source = `{tok_repo}`
 - 32-d EXOG = 24 common + 8 crypto-market features""",
@@ -237,6 +239,8 @@ def main():
     ap.add_argument("--private", action="store_true")
     ap.add_argument("--token", default=os.getenv("HF_TOKEN"))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--base-model-name", default="NeoQuasar/Kronos-small",
+                    help="source foundation predictor repo used for this checkpoint, e.g. NeoQuasar/Kronos-base")
     args = ap.parse_args()
 
     if not args.tokenizer_ckpt and not args.predictor_ckpt:
@@ -298,7 +302,7 @@ def main():
         print(f"        OK n_layers={model.n_layers} d_model={model.d_model}")
 
         tok_repo = args.repo_tokenizer or "NeoQuasar/Kronos-Tokenizer-base"
-        pred_card_parts = _predictor_card_parts(args.market_tag, tok_repo)
+        pred_card_parts = _predictor_card_parts(args.market_tag, tok_repo, args.base_model_name)
         card = CARD_PREDICTOR_TMPL.format(
             repo=args.repo_predictor,
             tok_repo=tok_repo,

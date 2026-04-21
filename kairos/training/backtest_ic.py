@@ -352,6 +352,8 @@ def main():
                     help=">0 时每个 symbol 最多评估 N 个窗口（等距抽样覆盖全区间）")
     ap.add_argument("--tokenizer", default=None,
                     help="override tokenizer checkpoint / repo；默认优先本地 artifacts/checkpoints/tokenizer/checkpoints/best_model")
+    ap.add_argument("--predictor", default=None,
+                    help="override baseline predictor source repo / path；默认使用 cfg.pretrained_predictor_path")
     args = ap.parse_args()
 
     overrides: dict = {}
@@ -361,6 +363,8 @@ def main():
         overrides["dataset_path"] = args.dataset_path
     if args.market:
         overrides["market"] = args.market
+    if args.predictor:
+        overrides["pretrained_predictor_path"] = args.predictor
 
     cfg = TrainConfig(**overrides) if overrides else TrainConfig()
 
