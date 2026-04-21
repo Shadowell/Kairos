@@ -36,14 +36,9 @@ library_name: pytorch
 
 # {repo}
 
-Fine-tuned **Kronos-Tokenizer-base** ({market_human}), produced by
-**[Kairos](https://github.com/Shadowell/Kairos)**.
+{tokenizer_intro}
 
-The tokenizer encodes a rolling 6-dim OHLCV+amount window into two streams of
-discrete tokens (BSQ — Binary Spherical Quantization) that Kronos predictors
-consume downstream. Only the OHLCV inputs are used for training; the 32-dim
-exogenous channel required by `KronosWithExogenous` is not needed for the
-tokenizer itself.
+{tokenizer_notes}
 
 {metrics_block}
 
@@ -56,11 +51,9 @@ tok = KronosTokenizer.from_pretrained("{repo}")
 s1, s2 = tok.encode(x, half=True)
 ```
 
-## Training recipe
+{training_block}
 
-See `docs/CRYPTO_TOKENIZER_RUN.md` in the upstream repo for the full
-reproduction checklist (data collection, preparation, 15-epoch + patience 3
-fine-tune, reconstruction evaluation).
+{recipe_block}
 """
 
 CARD_PREDICTOR_TMPL = """---
@@ -91,6 +84,62 @@ def _format_market_tag(raw: str) -> tuple[str, str]:
              "ashare": "A-share (CSI300 daily)",
              "": "generic"}.get(raw, raw)
     return (f", {raw}" if raw else ""), human
+
+
+def _tokenizer_card_parts(raw: str) -> dict[str, str]:
+    raw = (raw or "").strip().lower()
+    if raw == "crypto":
+        return {
+            "tokenizer_intro": (
+                "Fine-tuned **Kronos-Tokenizer-base** on BTC/USDT + ETH/USDT 1-min "
+                "K-lines (2024-01 ~ 2026-04) using "
+                "**[Kairos](https://github.com/Shadowell/Kairos)**."
+            ),
+            "tokenizer_notes": (
+                "This tokenizer run reuses the same BTC/ETH spot corpus as "
+                "[`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto), "
+                "but fine-tunes the BSQ tokenizer itself instead of only adapting "
+                "the downstream predictor. The model encodes a rolling 6-dim "
+                "OHLCV+amount window into two streams of discrete tokens that "
+                "Kronos predictors consume downstream. Only the OHLCV inputs are "
+                "used for tokenizer training; the 32-dim exogenous channel "
+                "required by `KronosWithExogenous` is not needed here."
+            ),
+            "training_block": """## Training config (preset `crypto-1min`)
+
+- lookback 256 min
+- batch 50, OneCycleLR, early-stop patience 3
+- full-model fine-tune on `NeoQuasar/Kronos-Tokenizer-base`
+- training stopped at epoch 7; best checkpoint = epoch 4
+- total wall time: ~18 min 35 s on a single RTX 5090""",
+            "recipe_block": (
+                "## Training recipe\n\n"
+                "Full command log, evaluation commands, pitfalls and the "
+                "reproduction checklist are in "
+                "[`docs/CRYPTO_TOKENIZER_RUN.md`](https://github.com/Shadowell/Kairos/blob/main/docs/CRYPTO_TOKENIZER_RUN.md)."
+            ),
+        }
+
+    return {
+        "tokenizer_intro": (
+            f"Fine-tuned **Kronos-Tokenizer-base** ({_format_market_tag(raw)[1]}), "
+            "produced by **[Kairos](https://github.com/Shadowell/Kairos)**."
+        ),
+        "tokenizer_notes": (
+            "The tokenizer encodes a rolling 6-dim OHLCV+amount window into two "
+            "streams of discrete tokens (BSQ — Binary Spherical Quantization) "
+            "that Kronos predictors consume downstream. Only the OHLCV inputs "
+            "are used for training; the 32-dim exogenous channel required by "
+            "`KronosWithExogenous` is not needed for the tokenizer itself."
+        ),
+        "training_block": "## Training config\n\nSee the upstream Kairos repo for the market-specific preset used for this run.",
+        "recipe_block": (
+            "## Training recipe\n\n"
+            "See the corresponding training doc in the upstream "
+            "[Kairos](https://github.com/Shadowell/Kairos) repo for the full "
+            "reproduction checklist."
+        ),
+    }
 
 
 def _push(local_dir: Path, repo_id: str, private: bool, token: str | None, card: str):
@@ -151,11 +200,15 @@ def main():
         tok = KronosTokenizer.from_pretrained(str(tok_dir))
         print(f"        OK d_in={tok.d_in} d_model={tok.d_model} "
               f"s1={tok.s1_bits} s2={tok.s2_bits}")
+        tok_card_parts = _tokenizer_card_parts(args.market_tag)
         card = CARD_TOKENIZER_TMPL.format(
             repo=args.repo_tokenizer,
             market_tag=market_tag,
-            market_human=market_human,
             metrics_block=metrics_block or "_No quantitative metrics were supplied at upload time._",
+            tokenizer_intro=tok_card_parts["tokenizer_intro"],
+            tokenizer_notes=tok_card_parts["tokenizer_notes"],
+            training_block=tok_card_parts["training_block"],
+            recipe_block=tok_card_parts["recipe_block"],
         )
         if args.dry_run:
             print("[dry-run] would push tokenizer → ", args.repo_tokenizer)
