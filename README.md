@@ -132,6 +132,30 @@ python -m kairos.training.backtest_ic \
 
 For real training, use the remote GPU workflow in [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md).
 
+### `kairos-serve` — `POST /predict` JSON fields
+
+Start the API (after `pip install -e '.[serve]'`):
+
+```bash
+kairos-serve --tokenizer NeoQuasar/Kronos-Tokenizer-base --predictor NeoQuasar/Kronos-small
+```
+
+Each request field can be omitted to use the default. Full JSON schema and examples: [docs/SERVE_HTTP_API.md](docs/SERVE_HTTP_API.md).
+
+| Field | 中文含义 | 说明 |
+|---|---|---|
+| `symbol` | 六位 A 股代码 | 例：`600977`。 |
+| `freq` | K 线周期 | `daily` 为日线；`5min`/`15min`/`30min`/`60min` 为分钟线（经 akshare）。 |
+| `lookback` | 用于推理的历史 K 线根数（取最近 N 根） | 取值 **32～2000**，默认 **400**；越大算力越大，且不宜明显超过服务的 `--max-context`（默认 512）。 |
+| `pred_len` | 向前预测多少个未来时间点 | 取值 **1～240**，默认 **20**；与 `pred_close`、`forecast` 长度一致。 |
+| `T` | 采样温度 | 默认 **0.6**；越大随机性越强，取值 `(0, 2]`。 |
+| `top_p` | nucleus 采样中的 top-p | 默认 **0.9**，取值 `(0, 1]`。 |
+| `top_k` | top-k 截断采样 | 默认 **0**（通常为关闭，具体以 Kronos 采样实现为准）。 |
+| `sample_count` | 采样路径条数（多次采样） | 默认 **5**，取值 **1～32**；越大通常延迟与负载越高。 |
+| `adjust` | 复权方式（传给 akshare） | 默认 **`qfq`**（前复权）。 |
+
+This service uses NeoQuasar **Kronos** + `KronosPredictor`; it does **not** expose the 32-channel `KronosWithExogenous` path.
+
 ## Repository Shape
 
 ```text
