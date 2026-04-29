@@ -158,6 +158,7 @@ Kairos/
 | Understand terminology and metrics | [docs/CONCEPTS_AND_GLOSSARY.md](docs/CONCEPTS_AND_GLOSSARY.md) |
 | Run training on AutoDL | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
 | Work on crypto data pipelines | [docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](docs/CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md) |
+| Call the `kairos-serve` HTTP API | [docs/SERVE_HTTP_API.md](docs/SERVE_HTTP_API.md) |
 | Study the best successful crypto run | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
 | Understand the current roadmap | [docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md](docs/PROJECT_ROADMAP_AND_NEXT_STEPS.md) |
 | Follow repository agent rules | [AGENTS.md](AGENTS.md) |

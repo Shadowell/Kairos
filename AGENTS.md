@@ -61,7 +61,8 @@ Kairos/
 │   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 1 year spot predictor run log
 │   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md # OKX perpetual multi-channel transformation plan
 │   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md # OKX perpetual Top10 30-day experiment post-mortem
-│   └── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer fine-tuning and evaluation records
+│   ├── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer fine-tuning and evaluation records
+│   └── SERVE_HTTP_API.md                    # kairos-serve JSON request/response for /predict and /health
 ├── scripts/                      # Operations/CI auxiliary script
 │   ├── autodl_bootstrap.sh       # AutoDL one-command initialization (venv + hf mirror + smoke)
 │   ├── package_and_upload.sh     # Package + scp to AutoDL

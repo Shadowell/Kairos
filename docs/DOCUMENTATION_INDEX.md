@@ -38,6 +38,11 @@ Recommended reading order:
 - [CRYPTO_BTC_ETH_TOKENIZER_RUN.md](CRYPTO_BTC_ETH_TOKENIZER_RUN.md)
   The complete process of tokenizer fine-tuning and evaluation.
 
+### I want to deploy or call the prediction HTTP API
+
+- [SERVE_HTTP_API.md](SERVE_HTTP_API.md)
+  JSON request and response schema for `kairos-serve` (`POST /predict`, `GET /health`).
+
 ### I want to see what experiments have been done
 
 - [CRYPTO_BTC_ETH_2Y_SPOT_RUN.md](CRYPTO_BTC_ETH_2Y_SPOT_RUN.md)
@@ -69,6 +74,7 @@ Recommended reading order:
 - [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md)
 - [TRAINING_TUNING_PLAYBOOK.md](TRAINING_TUNING_PLAYBOOK.md)
 - [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)
+- [SERVE_HTTP_API.md](SERVE_HTTP_API.md)
 
 ### AI coding agent / repository maintenance
 
