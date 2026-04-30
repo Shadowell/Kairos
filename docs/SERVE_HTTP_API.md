@@ -1,14 +1,10 @@
 # kairos-serve HTTP API
 
-`kairos-serve` is implemented by `kairos.deploy.serve`. It loads a
-`KronosTokenizer`, a base `Kronos` predictor checkpoint, and calls
-`KronosPredictor.predict` to sample future bars.
+`kairos-serve` 由 `kairos.deploy.serve` 实现。它加载 `KronosTokenizer` 和基础 `Kronos` predictor checkpoint，然后调用 `KronosPredictor.predict` 采样未来 K 线。
 
-The service does **not** fetch exchange data. The caller must provide recent
-OHLCV bars in the request body. This keeps serving independent from OKX network
-availability and avoids hidden data-source behavior inside `/predict`.
+服务端**不负责抓交易所数据**。调用方必须在请求体里提供最近的 OHLCV bars。这样可以让服务部署不依赖 OKX 网络可用性，也避免 `/predict` 内部隐藏数据源行为。
 
-## Start The Server
+## 启动服务
 
 ```bash
 kairos-serve \
@@ -18,19 +14,19 @@ kairos-serve \
   --port 8000
 ```
 
-Important arguments:
+主要参数：
 
-| Argument | Required | Description |
+| 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `--tokenizer` | Yes | HF repo id or local tokenizer checkpoint path |
-| `--predictor` | Yes | HF repo id or local Kronos predictor checkpoint path |
-| `--device` | No | Defaults to CUDA, then MPS, then CPU |
-| `--max-context` | No | Max context length passed to `KronosPredictor` |
-| `--host` / `--port` | No | Uvicorn bind address |
+| `--tokenizer` | 是 | Hugging Face repo id 或本地 tokenizer checkpoint 路径 |
+| `--predictor` | 是 | Hugging Face repo id 或本地 Kronos predictor checkpoint 路径 |
+| `--device` | 否 | 默认优先 CUDA，其次 MPS，最后 CPU |
+| `--max-context` | 否 | 传给 `KronosPredictor` 的最大上下文长度 |
+| `--host` / `--port` | 否 | Uvicorn 监听地址 |
 
 ## `GET /health`
 
-Response:
+响应示例：
 
 ```json
 {
@@ -42,31 +38,31 @@ Response:
 
 ## `POST /predict`
 
-Request fields:
+请求字段：
 
-| Field | Type | Required | Default | Description |
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `symbol` | string | Yes | - | Exchange-native symbol, e.g. `BTC/USDT` |
-| `market_type` | string | No | `spot` | `spot` or `swap` |
-| `freq` | string | No | `1min` | `1min`, `3min`, `5min`, `15min`, `30min`, `60min`, `1h`, `2h`, `4h`, `1d`, `daily` |
-| `bars` | array | Yes | - | At least 32 OHLCV bars |
-| `lookback` | int | No | `400` | Tail bars used for context |
-| `pred_len` | int | No | `30` | Number of future bars to sample |
-| `T` | float | No | `0.6` | Sampling temperature |
-| `top_p` | float | No | `0.9` | Nucleus sampling threshold |
-| `top_k` | int | No | `0` | Top-k sampling; `0` disables |
-| `sample_count` | int | No | `5` | Number of sampled trajectories |
+| `symbol` | string | 是 | - | 交易所原生 symbol，例如 `BTC/USDT` |
+| `market_type` | string | 否 | `spot` | `spot` 或 `swap` |
+| `freq` | string | 否 | `1min` | `1min`、`3min`、`5min`、`15min`、`30min`、`60min`、`1h`、`2h`、`4h`、`1d`、`daily` |
+| `bars` | array | 是 | - | 至少 32 根 OHLCV bars |
+| `lookback` | int | 否 | `400` | 使用最近多少根 bars 作为上下文 |
+| `pred_len` | int | 否 | `30` | 向未来采样多少根 bars |
+| `T` | float | 否 | `0.6` | 采样温度 |
+| `top_p` | float | 否 | `0.9` | nucleus sampling 阈值 |
+| `top_k` | int | 否 | `0` | top-k 采样，`0` 表示关闭 |
+| `sample_count` | int | 否 | `5` | 采样轨迹数量 |
 
-Each item in `bars`:
+`bars` 每一项字段：
 
-| Field | Required | Description |
+| 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `datetime` | Yes | Bar timestamp, ISO-8601 preferred |
-| `open` / `high` / `low` / `close` | Yes | Price fields |
-| `volume` | Yes | Base or contract volume as provided by the caller |
-| `amount` | No | Quote amount; defaults to `close * volume` |
+| `datetime` | 是 | K 线时间戳，推荐 ISO-8601 |
+| `open` / `high` / `low` / `close` | 是 | 价格字段 |
+| `volume` | 是 | 调用方提供的基础币成交量或合约张数 |
+| `amount` | 否 | 计价币成交额；缺失时服务端用 `close * volume` 近似 |
 
-Example:
+请求示例：
 
 ```json
 {
@@ -88,20 +84,20 @@ Example:
 }
 ```
 
-The real request must include at least 32 bars.
+真实请求必须提供至少 32 根 bars。
 
-Response fields:
+响应字段：
 
-| Field | Description |
+| 字段 | 说明 |
 | --- | --- |
-| `symbol`, `market_type`, `freq` | Echoed request metadata |
-| `last_close` | Last input close |
-| `pred_close` | Forecast close sequence |
-| `pred_mean_return` | Mean forecast close return vs `last_close` |
-| `pred_direction_prob_up` | Fraction of sampled forecast closes above `last_close` |
-| `forecast` | Future bar objects with time, open, high, low, close, volume |
+| `symbol`、`market_type`、`freq` | 回传请求元数据 |
+| `last_close` | 输入序列最后一根 close |
+| `pred_close` | 预测 close 序列 |
+| `pred_mean_return` | 预测 close 相对 `last_close` 的平均收益 |
+| `pred_direction_prob_up` | 预测 close 高于 `last_close` 的比例 |
+| `forecast` | 未来 bar 对象，包含 time、open、high、low、close、volume |
 
-## Curl Skeleton
+## Curl 示例
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8000/predict" \
@@ -109,10 +105,7 @@ curl -s -X POST "http://127.0.0.1:8000/predict" \
   --data @request.json
 ```
 
-## Notes
+## 注意事项
 
-- `kairos-serve` currently runs the original Kronos predictor path, not the
-  exogenous-channel predictor path.
-- The endpoint is suitable for quick serving demos. Production deployment should
-  validate upstream bar normalization and timestamp monotonicity before calling
-  the service.
+- `kairos-serve` 当前走原版 Kronos predictor 路径，不是 32 维外生通道 predictor 路径。
+- 该接口适合快速服务演示。生产部署应在调用服务前校验上游 K 线归一化和时间戳单调性。

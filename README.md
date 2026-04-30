@@ -1,40 +1,32 @@
 # Kairos
 
-Kairos is a crypto fine-tuning and evaluation toolbox for the
-[Kronos](https://github.com/shiyu-coder/Kronos) time-series foundation model. It
-focuses on two instrument families: **spot** and **USDT-margined perpetual
-swaps**.
+Kairos 是基于 [Kronos](https://github.com/shiyu-coder/Kronos) 时间序列基础模型的加密货币微调与评测工具箱。当前只聚焦两类标的：**现货** 和 **USDT 本位永续合约**。
 
-## What It Does
+## 项目作用
 
-- Collects OKX-compatible crypto OHLCV data for spot and perpetual swaps.
-- Adds a fixed 32-dimensional exogenous channel: 24 common OHLCV-derived factors
-  plus 8 crypto factors.
-- Trains `KronosWithExogenous` predictor checkpoints and evaluates them with IC /
-  Rank-IC / ICIR backtests.
-- Pushes trained checkpoints to Hugging Face and serves prediction from caller
-  supplied OHLCV bars through FastAPI.
+- 采集 OKX 兼容的加密货币 OHLCV 数据，覆盖现货和永续合约。
+- 构建固定 32 维外生通道：24 维通用 OHLCV 因子 + 8 维 crypto 因子。
+- 训练 `KronosWithExogenous` predictor checkpoint，并用 IC / Rank-IC / ICIR 回测评估。
+- 支持把 checkpoint 推送到 Hugging Face，并通过 FastAPI 用调用方传入的 OHLCV bars 做预测服务。
 
-## Current Status
+## 当前状态
 
-The public predictor runs below are the main usable references. Report deltas
-against the baseline model, not absolute IC alone.
+下面是目前可作为参考的公开 predictor 结果。报告结果时必须看相对 baseline 的增量，不要只看绝对 IC。
 
-| Run | Universe | h30 Rank-IC | h30 ICIR | Notes |
+| 实验 | 标的范围 | h30 Rank-IC | h30 ICIR | 说明 |
 | --- | --- | ---: | ---: | --- |
-| BTC/ETH 2y spot | 2 symbols | `+0.050` | `+0.325` | First usable crypto signal |
-| Top100 1y spot | 100 symbols | `+0.030` | `+0.454` | Better stability from broader universe |
-| BTC/ETH 2y spot + `Kronos-base` | 2 symbols | `+0.076` | `+0.484` | Current best public result |
+| BTC/ETH 2 年现货 | 2 个币 | `+0.050` | `+0.325` | 第一个可用 crypto signal |
+| Top100 1 年现货 | 100 个币 | `+0.030` | `+0.454` | 更大 universe 提升稳定性 |
+| BTC/ETH 2 年现货 + `Kronos-base` | 2 个币 | `+0.076` | `+0.484` | 当前最好公开结果 |
 
-OKX perpetual-swap multichannel work is connected but still experimental. The
-first Top10 30-day run is documented as a post-mortem, not a production result.
+OKX 永续合约多通道路径已经接通，但仍处在实验阶段。第一次 Top10 30 天永续实验应视为复盘样本，不应视为生产结果。
 
-## Public Models
+## 公开模型
 
-| Repo | Base model | Data | Purpose |
+| Repo | 基座模型 | 数据 | 用途 |
 | --- | --- | --- | --- |
-| [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | BTC/USDT + ETH/USDT, 1-min | Public small predictor checkpoint |
-| [`Shadowell/Kairos-base-crypto`](https://huggingface.co/Shadowell/Kairos-base-crypto) | [`NeoQuasar/Kronos-base`](https://huggingface.co/NeoQuasar/Kronos-base) | BTC/USDT + ETH/USDT, 1-min | Public base predictor checkpoint |
+| [`Shadowell/Kairos-small-crypto`](https://huggingface.co/Shadowell/Kairos-small-crypto) | [`NeoQuasar/Kronos-small`](https://huggingface.co/NeoQuasar/Kronos-small) | BTC/USDT + ETH/USDT，1 分钟 | 公开 small predictor checkpoint |
+| [`Shadowell/Kairos-base-crypto`](https://huggingface.co/Shadowell/Kairos-base-crypto) | [`NeoQuasar/Kronos-base`](https://huggingface.co/NeoQuasar/Kronos-base) | BTC/USDT + ETH/USDT，1 分钟 | 公开 base predictor checkpoint |
 
 ```python
 from kairos.models import KronosWithExogenous
@@ -42,22 +34,18 @@ from kairos.models import KronosWithExogenous
 model = KronosWithExogenous.from_pretrained("Shadowell/Kairos-base-crypto")
 ```
 
-## Feature Schema
+## 特征结构
 
-The exogenous vector is fixed at 32 dimensions:
+外生向量固定为 32 维：
 
-- Common OHLCV block, 24 dims: returns, volatility, volume/amount, range, VWAP,
-  and padding factors from `kairos.data.common_features`.
-- Crypto block, 8 dims: `market_ret_1`, `market_vol_20`, `hour_sin`,
-  `hour_cos`, `funding_rate`, `funding_rate_z`, `oi_change`, `basis`.
+- 通用 OHLCV 因子 24 维：收益、波动率、成交量/成交额、振幅、VWAP 和保留 pad。
+- Crypto 因子 8 维：`market_ret_1`、`market_vol_20`、`hour_sin`、`hour_cos`、`funding_rate`、`funding_rate_z`、`oi_change`、`basis`。
 
-Spot datasets use the four universal crypto factors and keep swap-only columns
-at zero. Swap datasets can additionally use funding, OI, and spot-vs-swap basis
-sidecars from OKX.
+现货数据使用前 4 个通用 crypto 因子，合约专属列填 0。永续合约数据可以额外接入 OKX 的 funding、OI、现货-合约 basis sidecar。
 
-## Quick Start
+## 快速开始
 
-### Install
+### 安装
 
 ```bash
 python -m venv .venv
@@ -65,7 +53,7 @@ source .venv/bin/activate
 pip install -e '.[train,serve]'
 ```
 
-### Collect OKX Spot
+### 采集 OKX 现货
 
 ```bash
 kairos-collect --market-type spot \
@@ -74,7 +62,7 @@ kairos-collect --market-type spot \
   --out ./raw/crypto/okx_spot_btc_eth_1min --workers 1
 ```
 
-### Collect OKX Perpetual Swaps
+### 采集 OKX 永续合约
 
 ```bash
 kairos-collect --market-type swap \
@@ -84,7 +72,7 @@ kairos-collect --market-type swap \
   --crypto-extras funding,open_interest,spot,reference
 ```
 
-### Package A Dataset
+### 打包数据集
 
 ```bash
 kairos-prepare --market crypto --market-type swap \
@@ -95,7 +83,7 @@ kairos-prepare --market crypto --market-type swap \
   --out ./finetune/data/crypto_swap_btc_eth_1min
 ```
 
-### Train And Backtest
+### 训练和回测
 
 ```bash
 export KAIROS_PRESET=crypto-1min
@@ -111,36 +99,34 @@ python -m kairos.training.backtest_ic --ckpt artifacts/checkpoints/predictor/che
   --out artifacts/backtest_finetuned.json
 ```
 
-## Serving
+## 服务接口
 
-`kairos-serve` does not fetch exchange data. The `/predict` endpoint accepts a
-JSON body with `symbol`, `market_type`, `freq`, and a `bars` array containing
-`datetime`, `open`, `high`, `low`, `close`, `volume`, and optional `amount`.
+`kairos-serve` 不负责抓交易所行情。`/predict` 接口接收 JSON body，字段包括 `symbol`、`market_type`、`freq`，以及 `bars` 数组。`bars` 每一项包含 `datetime`、`open`、`high`、`low`、`close`、`volume`，以及可选的 `amount`。
 
-## Repository Shape
+## 仓库结构
 
 ```text
 kairos/
-  data/       # OKX-compatible collection, extras, feature packaging
-  models/     # KronosWithExogenous and quantile return head
-  training/   # predictor/tokenizer training and IC backtests
-  deploy/     # Hugging Face push and FastAPI serving
-  vendor/     # Kronos source snapshot
-docs/         # guides, run logs, plans, and interpretation notes
-examples/     # quickstart scripts and universe snapshots
-tests/        # pytest smoke and feature tests
+  data/       # OKX 兼容采集、extras、特征打包
+  models/     # KronosWithExogenous 和 quantile return head
+  training/   # predictor/tokenizer 训练与 IC 回测
+  deploy/     # Hugging Face 推送和 FastAPI 服务
+  vendor/     # Kronos 源码快照
+docs/         # 指南、实验记录、计划书、复盘
+examples/     # quickstart 脚本和 universe 快照
+tests/        # pytest smoke 和特征测试
 ```
 
-## Where To Read Next
+## 下一步阅读
 
-| Goal | Document |
+| 目标 | 文档 |
 | --- | --- |
-| Navigate the docs | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
-| Understand OKX spot/perp exogenous factors | [docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md) |
-| Interpret IC backtests | [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) |
-| Run remote training | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
-| Study the best successful run | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
+| 浏览文档地图 | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
+| 理解 OKX 现货/永续外生因子 | [docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md) |
+| 解释 IC 回测 | [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) |
+| 远程训练 | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
+| 阅读当前最佳实验 | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
 
-## License
+## 许可证
 
-MIT.
+MIT。
