@@ -1,9 +1,8 @@
 """Market-agnostic technical features.
 
-These factors depend only on OHLCV columns that every market provides, so
-they can be computed identically for A-shares, crypto, FX, commodities, etc.
-Market-specific factors (turnover, funding rate, index-relative returns, ...)
-live behind :meth:`MarketAdapter.market_features` and are merged in by
+These factors depend only on OHLCV columns that spot and derivatives venues
+provide. Crypto-specific factors such as funding rate and basis live behind
+:meth:`MarketAdapter.market_features` and are merged in by
 :func:`kairos.data.features.build_features`.
 
 All calculations obey the project-wide "no future information leakage" rule:

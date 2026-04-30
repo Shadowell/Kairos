@@ -12,10 +12,9 @@ Reads pickle files produced by :mod:`kairos.data.prepare_dataset`:
         meta.json         # optional, produced by kairos-prepare; records the
                           #   market / freq / exog schema
 
-The dataset itself makes no market-specific assumptions: time features and
-standardisation are applied identically regardless of whether the bars are
-daily A-share candles or 1-minute BTC/USDT perp bars. The pickle layout is
-shared so a single trainer works for both.
+The dataset itself makes no instrument-specific assumptions: time features and
+standardisation are applied identically to spot and perpetual-swap crypto bars.
+The pickle layout is shared so a single trainer works for both.
 """
 
 from __future__ import annotations

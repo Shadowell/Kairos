@@ -35,6 +35,8 @@ Recommended reading order:
   The complete process from local development to remote GPU training and checkpoint return.
 - [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)
   crypto data source, exchange, proxy, network restrictions, extended access.
+- [CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md)
+  OKX spot/perpetual factor availability, selected exogenous schema, and training plan.
 - [CRYPTO_BTC_ETH_TOKENIZER_RUN.md](CRYPTO_BTC_ETH_TOKENIZER_RUN.md)
   The complete process of tokenizer fine-tuning and evaluation.
 
@@ -56,6 +58,8 @@ Recommended reading order:
 
 - [PROJECT_ROADMAP_AND_NEXT_STEPS.md](PROJECT_ROADMAP_AND_NEXT_STEPS.md)
   Current roadmap, priorities, acceptance criteria, and time estimates.
+- [CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md)
+  The current detailed plan for spot and perpetual training with OKX factors.
 - [CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md](CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md)
   A special plan for perpetual multi-channel data transformation.
 
@@ -68,12 +72,14 @@ Recommended reading order:
 - [README.md](../README.md)
 - [BACKTEST_IC_INTERPRETATION_GUIDE.md](BACKTEST_IC_INTERPRETATION_GUIDE.md)
 - [PROJECT_ROADMAP_AND_NEXT_STEPS.md](PROJECT_ROADMAP_AND_NEXT_STEPS.md)
+- [CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md)
 
 ### Engineering / Training Perspective
 
 - [AUTODL_REMOTE_TRAINING_GUIDE.md](AUTODL_REMOTE_TRAINING_GUIDE.md)
 - [TRAINING_TUNING_PLAYBOOK.md](TRAINING_TUNING_PLAYBOOK.md)
 - [CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md](CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md)
+- [CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md)
 - [SERVE_HTTP_API.md](SERVE_HTTP_API.md)
 
 ### AI coding agent / repository maintenance

@@ -2,8 +2,7 @@
 
 Plugs the cross-venue :mod:`crypto_exchanges` layer into Kairos'
 :class:`~kairos.data.markets.base.MarketAdapter` contract so that
-``kairos-collect --market crypto`` is a first-class alternative to
-``--market ashare``.
+``kairos-collect --market crypto`` is the primary data path.
 
 Design notes
 ------------
@@ -105,26 +104,26 @@ class CryptoAdapter(MarketAdapter):
     name = "crypto"
     supported_freqs = tuple(_FREQ_TO_PANDAS.keys())
 
-    #: 8 market-specific columns. The first 5 get populated once
-    #: funding/OI/basis/dominance series are supplied via ``FeatureContext``;
-    #: until then they stay at 0 so the exog vector keeps a stable shape.
-    #: ``hour_sin`` / ``hour_cos`` encode the 24h intraday cycle (crypto has
-    #: no session breaks, so this is the intraday-seasonality hook).
+    #: 8 market-specific columns: four spot/swap-universal factors followed by
+    #: four swap-specific factors. Missing sidecars are filled with 0 so spot
+    #: and swap datasets keep the same 32-dimensional exog schema.
     MARKET_EXOG_COLS = (
+        "market_ret_1",
+        "market_vol_20",
+        "hour_sin",
+        "hour_cos",
         "funding_rate",
         "funding_rate_z",
         "oi_change",
         "basis",
-        "btc_dominance",
-        "hour_sin",
-        "hour_cos",
-        "pad_crypto_0",
     )
 
     def __init__(
         self,
         exchange: Optional[str] = None,
         config: Optional[ExchangeConfig] = None,
+        proxy: Optional[str] = None,
+        market_type: Optional[str] = None,
     ) -> None:
         self._exchange_name = (
             exchange
@@ -135,10 +134,19 @@ class CryptoAdapter(MarketAdapter):
             raise ValueError(
                 f"crypto exchange {self._exchange_name!r} not available; "
                 f"installed: {available_exchanges()}. "
-                "Make sure `ccxt` is installed via `pip install "
-                "'kairos-kronos[crypto]'`."
+                "Make sure `ccxt` is installed via `pip install -e .`."
             )
-        self._config = config or ExchangeConfig()
+        if config is None:
+            self._config = ExchangeConfig(
+                proxy=proxy,
+                market_type=market_type or ExchangeConfig().market_type,
+            )
+        else:
+            self._config = config
+            if proxy is not None:
+                self._config.proxy = proxy
+            if market_type is not None:
+                self._config.market_type = market_type
         self._exchange: Optional[CryptoExchange] = None  # lazy-instantiate
 
     # ------------------------------------------------------------------
@@ -193,17 +201,29 @@ class CryptoAdapter(MarketAdapter):
             return hook(top_n)
 
         markets = ex.list_markets()
-        # Keep linear USDT-margined perpetuals only; this is the contract type
-        # that matches DEFAULT_MARKET_TYPE="swap" and the EXOG factors Kairos
-        # will add in Phase 2 (funding rate, open interest).
-        candidates = [
-            m
-            for m in markets
-            if m.get("active", True)
-            and m.get("swap", False)
-            and m.get("linear", False)
-            and m.get("quote") == "USDT"
-        ]
+        if self._config.market_type == "spot":
+            candidates = [
+                m
+                for m in markets
+                if m.get("active", True)
+                and not m.get("contract", False)
+                and not m.get("swap", False)
+                and m.get("quote") == "USDT"
+            ]
+        elif self._config.market_type == "swap":
+            candidates = [
+                m
+                for m in markets
+                if m.get("active", True)
+                and m.get("swap", False)
+                and m.get("linear", False)
+                and m.get("quote") == "USDT"
+            ]
+        else:
+            raise ValueError(
+                f"market_type={self._config.market_type!r} is not supported; "
+                "use 'spot' or 'swap'"
+            )
 
         ccxt_client = getattr(ex, "_ccxt", None)
         if ccxt_client is None:
@@ -277,7 +297,7 @@ class CryptoAdapter(MarketAdapter):
         -------
         dict
             Keys are the extras kinds (``"funding"`` / ``"open_interest"`` /
-            ``"spot"``), values are DataFrames with ``datetime`` +
+            ``"spot"`` / ``"reference"``), values are DataFrames with ``datetime`` +
             single payload column ready to be handed to
             :mod:`kairos.data.crypto_extras` writers.
 
@@ -302,8 +322,9 @@ class CryptoAdapter(MarketAdapter):
         end_ms = _to_unix_ms(task.end, end_of_day=True)
         out: dict[str, pd.DataFrame] = {}
         ex = self.exchange
+        is_swap = self._config.market_type == "swap" or ":" in task.symbol
 
-        if _ce.KIND_FUNDING in kinds:
+        if _ce.KIND_FUNDING in kinds and is_swap:
             hook = getattr(ex, "fetch_funding_rate_history", None)
             if hook is None:
                 log.warning(
@@ -319,7 +340,7 @@ class CryptoAdapter(MarketAdapter):
                     if df is not None and len(df) > 0:
                         out[_ce.KIND_FUNDING] = _reset_datetime_index(df)
 
-        if _ce.KIND_OI in kinds:
+        if _ce.KIND_OI in kinds and is_swap:
             hook = getattr(ex, "fetch_open_interest_history", None)
             if hook is None:
                 log.warning(
@@ -335,7 +356,7 @@ class CryptoAdapter(MarketAdapter):
                     if df is not None and len(df) > 0:
                         out[_ce.KIND_OI] = _reset_datetime_index(df)
 
-        if _ce.KIND_SPOT in kinds:
+        if _ce.KIND_SPOT in kinds and is_swap:
             hook = getattr(ex, "fetch_spot_ohlcv", None)
             if hook is None:
                 log.warning(
@@ -360,6 +381,33 @@ class CryptoAdapter(MarketAdapter):
                         spot = df[["datetime", "close"]].copy()
                         out[_ce.KIND_SPOT] = spot
 
+        if _ce.KIND_REFERENCE in kinds:
+            hook = getattr(ex, "fetch_spot_ohlcv", None)
+            if hook is None:
+                log.warning(
+                    f"exchange {ex.name!r} has no fetch_spot_ohlcv; "
+                    "skipping market reference"
+                )
+            else:
+                reference_symbol = os.environ.get(
+                    "KAIROS_CRYPTO_REFERENCE_SYMBOL",
+                    "BTC/USDT",
+                )
+                try:
+                    df = hook(
+                        reference_symbol,
+                        freq=task.freq,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        f"[{task.symbol}] reference {reference_symbol} fetch failed: {e}"
+                    )
+                else:
+                    if df is not None and len(df) > 0:
+                        out[_ce.KIND_REFERENCE] = df[["datetime", "close"]].copy()
+
         return out
 
     # ------------------------------------------------------------------
@@ -373,9 +421,16 @@ class CryptoAdapter(MarketAdapter):
     ) -> pd.DataFrame:
         """Crypto exogenous features.
 
-        Five data-driven factors (``funding_rate``, ``funding_rate_z``,
-        ``oi_change``, ``basis``, ``btc_dominance``) expect to receive
-        pre-aligned series via ``context.extras`` keyed as follows:
+        The schema intentionally separates universal crypto factors from
+        swap-only factors:
+
+        * ``market_ret_1`` / ``market_vol_20`` use ``extras["reference_close"]``
+          when available, otherwise fall back to the instrument's own close.
+        * ``hour_sin`` / ``hour_cos`` encode the 24h intraday cycle.
+        * ``funding_rate`` / ``funding_rate_z`` / ``oi_change`` / ``basis`` are
+          swap-specific. Spot datasets keep them at zero.
+
+        Optional sidecars are supplied through ``context.extras``:
 
         * ``"funding_rate"`` — DataFrame/Series indexed by datetime, rate
           per 8h settlement, usually sourced from
@@ -384,15 +439,13 @@ class CryptoAdapter(MarketAdapter):
           log-change internally.
         * ``"spot_close"`` — spot close price aligned to the perp bars;
           we compute basis as ``(perp / spot - 1)``.
-        * ``"btc_dominance"`` — pre-computed BTC market-cap dominance
-          (0-1) at each bar.
+        * ``"reference_close"`` — market reference close, normally BTC/USDT.
 
         When a series is missing, the column is filled with 0.0 so the
         resulting exog vector has the expected width.
 
-        The last three columns (``hour_sin``, ``hour_cos``, ``pad_crypto_0``)
-        are computed locally from the timestamp and never rely on external
-        series, so they always carry real signal.
+        ``hour_sin`` / ``hour_cos`` are computed locally from timestamps and
+        never rely on external series.
         """
 
         out = pd.DataFrame(index=df.index)
@@ -404,12 +457,27 @@ class CryptoAdapter(MarketAdapter):
         )
         extras = context.extras if context is not None else {}
 
-        # --- funding rate ---
+        # --- market reference momentum/volatility (spot + swap) ---
+        ref_close = _align_series(extras.get("reference_close"), dt)
+        if ref_close.isna().all():
+            ref_close = pd.Series(df["close"].astype(float).values, index=range(len(dt)))
+        ref_ret = np.log(ref_close / ref_close.shift(1))
+        ref_ret = ref_ret.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        out["market_ret_1"] = ref_ret.values
+        out["market_vol_20"] = ref_ret.rolling(20, min_periods=5).std().fillna(0.0).values
+
+        # --- 24h intraday cycle (spot + swap) ---
+        hour_of_day = dt.dt.hour.astype(float) + dt.dt.minute.astype(float) / 60.0
+        radians = 2.0 * np.pi * (hour_of_day.values / 24.0)
+        out["hour_sin"] = np.sin(radians)
+        out["hour_cos"] = np.cos(radians)
+
+        # --- funding rate (swap only) ---
         funding = _align_series(extras.get("funding_rate"), dt)
         out["funding_rate"] = funding.fillna(0.0).values
         out["funding_rate_z"] = rolling_z(funding.fillna(0.0), 60).fillna(0.0).values
 
-        # --- open-interest change (log-delta) ---
+        # --- open-interest change (swap only) ---
         oi = _align_series(extras.get("open_interest"), dt)
         oi_change = np.log(oi / oi.shift(1))
         out["oi_change"] = oi_change.replace(
@@ -423,19 +491,6 @@ class CryptoAdapter(MarketAdapter):
             basis = perp_close / spot.values - 1.0
         basis = np.where(np.isfinite(basis), basis, 0.0)
         out["basis"] = basis
-
-        # --- btc dominance (0..1) ---
-        dominance = _align_series(extras.get("btc_dominance"), dt)
-        out["btc_dominance"] = dominance.fillna(0.0).values
-
-        # --- 24h intraday cycle (always computable) ---
-        hour_of_day = dt.dt.hour.astype(float) + dt.dt.minute.astype(float) / 60.0
-        radians = 2.0 * np.pi * (hour_of_day.values / 24.0)
-        out["hour_sin"] = np.sin(radians)
-        out["hour_cos"] = np.cos(radians)
-
-        # --- local pad ---
-        out["pad_crypto_0"] = 0.0
 
         if len(out) != n:
             raise RuntimeError(
@@ -500,7 +555,7 @@ def _perp_to_spot_symbol(perp_symbol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Registry entry — lazy so that missing ccxt doesn't blow up pure A-share users.
+# Registry entry.
 # ---------------------------------------------------------------------------
 def _factory(**kwargs) -> MarketAdapter:
     """Adapter factory used by :func:`kairos.data.markets.get_adapter`.
@@ -511,8 +566,14 @@ def _factory(**kwargs) -> MarketAdapter:
     """
     proxy = kwargs.pop("proxy", None)
     exchange = kwargs.pop("exchange", None)
-    config = ExchangeConfig(proxy=proxy) if proxy else None
-    return CryptoAdapter(exchange=exchange, config=config)
+    market_type = kwargs.pop("market_type", None)
+    config = kwargs.pop("config", None)
+    return CryptoAdapter(
+        exchange=exchange,
+        config=config,
+        proxy=proxy,
+        market_type=market_type,
+    )
 
 
 register_adapter("crypto", _factory, overwrite=True)

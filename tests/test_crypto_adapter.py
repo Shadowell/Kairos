@@ -159,8 +159,8 @@ def _install_fake_ccxt(monkeypatch):
 def test_sanitize_symbol_roundtrip():
     from kairos.data.markets.base import sanitize_symbol
 
-    assert sanitize_symbol("600000") == "600000"
     assert sanitize_symbol("BTC/USDT:USDT") == "BTC_USDT-USDT"
+    assert sanitize_symbol("BTC/USDT") == "BTC_USDT"
 
 
 def test_crypto_adapter_top_by_volume(monkeypatch):
@@ -171,6 +171,16 @@ def test_crypto_adapter_top_by_volume(monkeypatch):
     adapter = CryptoAdapter()
     top2 = adapter.list_symbols("top2")
     assert top2 == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+
+def test_crypto_adapter_spot_top_by_volume(monkeypatch):
+    _install_fake_ccxt(monkeypatch)
+
+    from kairos.data.markets.crypto import CryptoAdapter
+
+    adapter = CryptoAdapter(market_type="spot")
+    top1 = adapter.list_symbols("top1")
+    assert top1 == ["BTC/USDT"]
 
 
 def test_crypto_adapter_ad_hoc_symbols(monkeypatch):
@@ -193,7 +203,7 @@ def test_crypto_adapter_rejects_unknown_universe(monkeypatch):
 
     adapter = CryptoAdapter()
     with pytest.raises(ValueError, match="unknown crypto universe"):
-        adapter.list_symbols("csi300")
+        adapter.list_symbols("not-a-universe")
 
 
 def test_crypto_adapter_fetch_ohlcv_paginates(monkeypatch):
@@ -258,8 +268,13 @@ def test_dispatcher_forwards_proxy(monkeypatch):
 
     from kairos.data.markets import get_adapter
 
-    adapter = get_adapter("crypto", proxy="http://proxy.example:1234")
+    adapter = get_adapter(
+        "crypto",
+        proxy="http://proxy.example:1234",
+        market_type="spot",
+    )
     assert adapter.exchange._ccxt.https_proxy == "http://proxy.example:1234"
+    assert adapter.exchange._ccxt.options["defaultType"] == "spot"
 
 
 def test_crypto_adapter_fetch_extras_returns_per_kind(monkeypatch):
@@ -347,9 +362,10 @@ def test_collect_resolve_extras_kinds():
     resolved = _resolve_extras_kinds("funding,all", "crypto")
     assert resolved[0] == "funding"
     assert "open_interest" in resolved and "spot" in resolved
+    assert "reference" in resolved
 
     # Non-crypto market silently ignores (with warning).
-    assert _resolve_extras_kinds("funding", "ashare") == []
+    assert _resolve_extras_kinds("funding", "other") == []
 
 
 def test_collect_resolve_extras_kinds_rejects_unknown():

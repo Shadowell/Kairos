@@ -89,7 +89,8 @@ def _format_market_tag(raw: str) -> tuple[str, str]:
     """Return the YAML-tag fragment and a human-readable label."""
     raw = (raw or "").strip().lower()
     human = {"crypto": "crypto (BTC/USDT + ETH/USDT 1-min)",
-             "ashare": "A-share (CSI300 daily)",
+             "spot": "crypto spot",
+             "swap": "crypto perpetual swap",
              "": "generic"}.get(raw, raw)
     return (f", {raw}" if raw else ""), human
 
@@ -174,10 +175,9 @@ def _predictor_card_parts(raw: str, tok_repo: str, base_model_name: str) -> dict
             ),
             "predictor_notes": (
                 f"{tokenizer_note} Training data comes "
-                "from the public Binance Vision spot mirror, so the 5 crypto-native "
-                "exogenous features (`funding_rate` / `funding_rate_z` / "
-                "`oi_change` / `basis` / `btc_dominance`) remain padded to zero; "
-                "the other 27 dimensions are real."
+                "from a spot-only source, so the 4 swap-specific exogenous "
+                "features (`funding_rate` / `funding_rate_z` / `oi_change` / "
+                "`basis`) remain padded to zero; the other 28 dimensions are real."
             ),
             "training_block": f"""## Training config (preset `crypto-1min`)
 
@@ -233,7 +233,7 @@ def main():
                     choices=["base", "ext"],
                     help="base = Kronos; ext = KronosWithExogenous")
     ap.add_argument("--market-tag", default="",
-                    help="Extra tag appended to the card's `tags:` list (e.g. 'crypto', 'ashare')")
+                    help="Extra tag appended to the card's `tags:` list (e.g. 'crypto', 'spot', 'swap')")
     ap.add_argument("--metrics-file", default=None,
                     help="Optional markdown snippet inlined into the tokenizer card (e.g. eval summary)")
     ap.add_argument("--private", action="store_true")

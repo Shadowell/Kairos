@@ -1,15 +1,12 @@
-"""Multi-market feature pipeline tests.
+"""Crypto feature pipeline tests.
 
 Covers:
 * :func:`kairos.data.common_features.build_common_features` produces exactly
   the 24-column canonical common block.
 * :func:`kairos.data.features.build_features` wires common + adapter blocks
-  into a 32-column exog vector for both A-share and crypto markets.
-* Each adapter declares ``MARKET_EXOG_COLS`` that sums to 8 (so the final
-  exog vector is always 32).
+  into a 32-column crypto exog vector.
 * ``kairos.data.prepare_dataset.process_symbol`` dispatches through the
-  requested market adapter and the resulting exog frame has the expected
-  column schema.
+  crypto adapter and the resulting exog frame has the expected column schema.
 """
 
 from __future__ import annotations
@@ -66,39 +63,32 @@ def test_common_features_pads_are_zero():
 # ---------------------------------------------------------------------------
 # Adapter schemas add up to 8
 # ---------------------------------------------------------------------------
-def test_ashare_market_feats_schema_length():
-    adapter = get_adapter("ashare")
-    assert len(adapter.MARKET_EXOG_COLS) == 8
-
-
 def test_crypto_market_feats_schema_length():
     adapter = get_adapter("crypto")
     assert len(adapter.MARKET_EXOG_COLS) == 8
 
 
-def test_common_plus_market_equals_32_for_every_known_market():
-    for market in ("ashare", "crypto"):
-        cols = exog_cols_for(market)
-        assert len(cols) == 32, (
-            f"market {market!r} produces {len(cols)} exog cols, expected 32"
-        )
+def test_common_plus_market_equals_32_for_crypto():
+    cols = exog_cols_for("crypto")
+    assert len(cols) == 32, (
+        f"crypto produces {len(cols)} exog cols, expected 32"
+    )
 
 
 def test_exog_cols_unique_per_market():
-    for market in ("ashare", "crypto"):
-        cols = exog_cols_for(market)
-        assert len(set(cols)) == len(cols), (
-            f"market {market!r} has duplicate exog column names: {cols}"
-        )
+    cols = exog_cols_for("crypto")
+    assert len(set(cols)) == len(cols), (
+        f"crypto has duplicate exog column names: {cols}"
+    )
 
 
 # ---------------------------------------------------------------------------
 # build_features orchestrator
 # ---------------------------------------------------------------------------
-def test_build_features_ashare_preserves_legacy_schema():
+def test_build_features_default_crypto_schema():
     df = _synthetic_df()
-    out = build_features(df)  # default market=ashare
-    for col in exog_cols_for("ashare"):
+    out = build_features(df)
+    for col in exog_cols_for("crypto"):
         assert col in out.columns
 
 
@@ -169,33 +159,12 @@ def test_process_symbol_crypto_dispatches_through_adapter(tmp_path: Path):
             assert exog.shape[1] == 32
 
 
-def test_process_symbol_ashare_default_is_unchanged(tmp_path: Path):
-    df = _synthetic_df(n=400)
-    pq = tmp_path / "000001.parquet"
-    df.to_parquet(pq)
-
-    pieces = process_symbol(
-        pq,
-        index_df=None,
-        train_range=("2020-01-01", "2020-06-30"),
-        val_range=("2020-07-01", "2020-09-30"),
-        test_range=("2020-10-01", "2021-12-31"),
-        min_len=50,
-    )
-    assert pieces is not None
-    assert "train" in pieces
-    # Default market is ashare → 32 cols, A-share schema
-    exog = pieces["train"]["exog"]
-    assert list(exog.columns) == exog_cols_for("ashare")
-
-
 # ---------------------------------------------------------------------------
 # TrainConfig presets
 # ---------------------------------------------------------------------------
 def test_train_config_presets():
     from kairos.training.config import TrainConfig, available_presets, preset_for
 
-    assert "ashare-daily" in available_presets()
     assert "crypto-1min" in available_presets()
 
     cfg = TrainConfig(**preset_for("crypto-1min"))

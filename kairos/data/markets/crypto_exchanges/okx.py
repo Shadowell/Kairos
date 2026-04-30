@@ -74,13 +74,20 @@ class OkxExchange(CryptoExchange):
         except ImportError as e:  # pragma: no cover
             raise ImportError(
                 "ccxt is required for the OKX adapter. "
-                "Install it with `pip install 'kairos-kronos[crypto]'` "
-                "or `pip install ccxt`."
+                "Install it with `pip install -e .` or `pip install ccxt`."
             ) from e
 
         opts: Dict[str, object] = {
             "enableRateLimit": self.config.enable_rate_limit,
             "timeout": self.config.timeout_ms,
+            "headers": {
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+            },
             "options": {
                 "defaultType": self.config.market_type,
                 **self.config.extra_options,

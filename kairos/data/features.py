@@ -9,12 +9,11 @@ The heavy lifting is split across two collaborators:
 * :func:`kairos.data.common_features.build_common_features` appends the 24
   market-agnostic factors (returns, momentum, volatility, microstructure, ...).
 * :meth:`kairos.data.markets.base.MarketAdapter.market_features` appends the
-  8 market-specific factors (turnover / calendar / excess-return for A-shares,
-  funding / OI / basis / intraday cycle for crypto, ...).
+  8 crypto market-specific factors.
 
 The old ``build_features(df, index_df=...)`` signature is preserved so existing
-call sites keep working. Under the hood it now dispatches through the A-share
-adapter by default; pass ``market="crypto"`` to use the crypto pipeline.
+call sites keep working. Kairos is crypto-only now, so the default market is
+``"crypto"``.
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ def _resolve_adapter(
     if isinstance(market, MarketAdapter):
         return market
     if market is None:
-        market = "ashare"
+        market = "crypto"
     return get_adapter(market)
 
 
@@ -54,13 +53,12 @@ def _build_exog_cols(adapter: MarketAdapter) -> list[str]:
     return cols
 
 
-#: Default 32-column exog schema (A-share). Kept as a module-level constant
-#: so legacy imports (``from kairos.data.features import EXOG_COLS``) still
-#: work without forcing callers to pass a market name.
-EXOG_COLS: list[str] = _build_exog_cols(_resolve_adapter("ashare"))
+#: Default 32-column exog schema for crypto. Kept as a module-level constant
+#: so imports (``from kairos.data.features import EXOG_COLS``) keep working.
+EXOG_COLS: list[str] = _build_exog_cols(_resolve_adapter("crypto"))
 
 
-def exog_cols_for(market: str | MarketAdapter = "ashare") -> list[str]:
+def exog_cols_for(market: str | MarketAdapter = "crypto") -> list[str]:
     """Return the 32-entry exog column list for the requested market."""
     return _build_exog_cols(_resolve_adapter(market))
 
@@ -70,7 +68,7 @@ def build_features(
     index_df: Optional[pd.DataFrame] = None,
     ffill_limit: int = 2,
     *,
-    market: str | MarketAdapter = "ashare",
+    market: str | MarketAdapter = "crypto",
     extras: Optional[dict] = None,
     symbol: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -82,15 +80,15 @@ def build_features(
         ``datetime`` may be a column or the index; it will be normalised to a
         column named ``datetime`` on output.
     index_df : DataFrame, optional
-        Reference index K-line (used by A-shares for excess-return). Ignored
-        by markets that don't consume it (e.g. crypto).
+        Optional reference K-line. Crypto currently relies on ``extras`` for
+        market-wide references; this argument remains for API compatibility.
     ffill_limit : int
         Max forward-fill steps applied to the exog columns before the final
-        ``fillna(0).clip(-5, 5)``. 2 is right for daily A-shares; intraday
-        crypto can bump it higher if needed.
+        ``fillna(0).clip(-5, 5)``. Intraday crypto callers can bump it higher
+        if needed.
     market : str or MarketAdapter
         Which :class:`MarketAdapter` produces the venue-specific factors.
-        Defaults to ``"ashare"`` so legacy call sites keep their behaviour.
+        Defaults to ``"crypto"``.
     extras : dict, optional
         Passed through to :class:`FeatureContext.extras`. Adapters use this
         to pick up auxiliary series they need (e.g. funding-rate history).
@@ -171,9 +169,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="per-symbol parquet")
     parser.add_argument("--index", default=None, help="optional index parquet")
-    parser.add_argument("--market", default="ashare",
+    parser.add_argument("--market", default="crypto",
                         help="which MarketAdapter supplies the venue-specific "
-                             "columns (default: ashare)")
+                             "columns (default: crypto)")
     args = parser.parse_args()
 
     df_in = pd.read_parquet(args.input)

@@ -19,13 +19,13 @@ class TrainConfig:
     #: heuristics (e.g. default ``return_horizon``). Must match what was
     #: passed to ``kairos-prepare --market``; falls back to the value in
     #: ``<dataset_path>/meta.json`` if present.
-    market: str = "ashare"
-    #: Native bar frequency of the dataset (``daily`` / ``1min`` / ...).
+    market: str = "crypto"
+    #: Native bar frequency of the dataset (``1min`` / ``5min`` / ...).
     #: Mostly a documentation hint right now, but the backtest script uses
     #: it to pick a reasonable cross-sectional aggregation rule.
-    freq: str = "daily"
-    lookback_window: int = 90
-    predict_window: int = 10
+    freq: str = "1min"
+    lookback_window: int = 256
+    predict_window: int = 32
     max_context: int = 512
     feature_list: List[str] = field(
         default_factory=lambda: ["open", "high", "low", "close", "vol", "amt"]
@@ -69,7 +69,7 @@ class TrainConfig:
     # ---------------- Exogenous / Return head ----------------
     use_exog: bool = True
     use_return_head: bool = True
-    return_horizon: int = 5
+    return_horizon: int = 30
     n_quantiles: int = 9
     ce_weight: float = 0.5
     quantile_weight: float = 2.0
@@ -79,18 +79,9 @@ class TrainConfig:
 # ---------------------------------------------------------------------------
 # Market-aware presets
 # ---------------------------------------------------------------------------
-# The A-share daily baseline is the status quo; crypto-1min inherits most of
-# it but shifts a few knobs that differ meaningfully at minute cadence:
-#   - ``return_horizon`` bumps to 30 bars (~30 minutes) so the regression
-#     head targets a window large enough to wash out microstructure noise.
-#   - ``freq`` is flagged so the backtest can aggregate by calendar minute
-#     instead of trading day.
-#   - ``predict_window`` is widened to match the longer return horizon.
+# Crypto minute presets keep the prediction horizon aligned with the current
+# h30 supervision target and IC backtest.
 _PRESETS: dict[str, dict] = {
-    "ashare-daily": {
-        "market": "ashare",
-        "freq": "daily",
-    },
     "crypto-1min": {
         "market": "crypto",
         "freq": "1min",

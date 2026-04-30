@@ -6,18 +6,18 @@ market-agnostic.
 
 Adapters are responsible for:
 
-1. Resolving a named *universe* (e.g. ``csi300`` / ``top10``) into a list of
+1. Resolving a named *universe* (e.g. ``top10``) into a list of
    raw instrument identifiers.
 2. Fetching raw OHLCV bars and standardising them into the shared
    :data:`STD_COLS` schema.
 3. Exposing a trading calendar so that dataset packing knows which timestamps
    are legitimate bars.
 4. (Optionally) computing market-specific exogenous features that the common
-   feature builder cannot produce on its own (e.g. ``turnover`` for A-shares,
-   ``funding_rate`` for crypto perps).
+   feature builder cannot produce on its own, such as ``funding_rate`` for
+   crypto perpetual swaps.
 
 Concrete adapters register themselves through :func:`register_adapter` so that
-CLI callers can simply pass ``--market ashare`` / ``--market crypto``.
+CLI callers can simply pass ``--market crypto``.
 """
 
 from __future__ import annotations
@@ -55,18 +55,18 @@ stable schema.
 class FeatureContext:
     """Auxiliary data the feature pipeline may hand to adapters.
 
-    This is a grab-bag on purpose: different markets need different side
-    channels (A-shares want an index K-line for relative returns, crypto
-    wants funding/OI history keyed by ccxt symbol, ...), and forcing every
-    adapter to accept a fixed argument list would either explode into 20
-    keyword arguments or pollute the base class.
+    This is a grab-bag on purpose: different instruments need different side
+    channels (crypto swaps want funding/OI history keyed by venue symbol, spot
+    runs may use a market reference close, ...), and forcing every adapter to
+    accept a fixed argument list would either explode into 20 keyword arguments
+    or pollute the base class.
     """
 
-    #: Adapter-native symbol currently being processed, e.g. ``"600000"`` or
+    #: Adapter-native symbol currently being processed, e.g. ``"BTC/USDT"`` or
     #: ``"BTC/USDT:USDT"``. Adapters use this to look up per-symbol auxiliary
     #: series inside ``extras``.
     symbol: str | None = None
-    #: Optional reference index K-line (used by A-shares for excess return).
+    #: Optional reference K-line.
     index_df: pd.DataFrame | None = None
     #: Free-form adapter-specific payload (crypto funding history, OI,
     #: spot-vs-perp basis, ...). Adapters are expected to know their own
@@ -94,10 +94,9 @@ class FetchTask:
 def sanitize_symbol(symbol: str) -> str:
     """Map a venue-native symbol to a filesystem-safe stem.
 
-    A-share codes (``600000``) pass through unchanged. ccxt symbols such as
-    ``BTC/USDT:USDT`` become ``BTC_USDT-USDT`` — the mapping is reversible by
-    convention (first ``/`` → ``_``, first ``:`` → ``-``) and keeps the stem
-    legible when you ``ls raw/crypto/1min``.
+    ccxt symbols such as ``BTC/USDT:USDT`` become ``BTC_USDT-USDT``. The
+    mapping is reversible by convention (first ``/`` -> ``_``, first ``:`` ->
+    ``-``) and keeps the stem legible when you inspect raw crypto data.
     """
     return symbol.replace("/", "_").replace(":", "-")
 
@@ -126,8 +125,7 @@ class MarketAdapter(ABC):
     ) -> pd.DatetimeIndex:
         """Return the timestamps that should contain a bar in ``[start, end]``.
 
-        For 24/7 markets this is simply a contiguous range; for session-based
-        markets (A-shares) it should exclude non-trading days and lunch breaks.
+        For 24/7 crypto markets this is simply a contiguous range.
         """
 
     #: Canonical list of market-specific feature names the adapter produces.
@@ -147,8 +145,8 @@ class MarketAdapter(ABC):
         The default implementation fills ``MARKET_EXOG_COLS`` with zeros so
         that every adapter contributes the same vector width even if the
         venue doesn't expose (or hasn't wired up) certain factors yet.
-        Concrete adapters override this to plug in e.g. ``turnover`` for
-        A-shares or ``funding_rate`` for crypto perps.
+        Concrete adapters override this to plug in crypto-specific channels
+        such as ``funding_rate``.
 
         Parameters
         ----------
@@ -157,8 +155,8 @@ class MarketAdapter(ABC):
             *new* frame with the same row index and only the extra columns
             in :attr:`MARKET_EXOG_COLS`.
         context : FeatureContext, optional
-            Auxiliary data the pipeline may pass in (e.g. the index K-line
-            for A-share excess returns, or funding-rate history for crypto).
+            Auxiliary data the pipeline may pass in, such as funding-rate
+            history, OI snapshots, or spot-close series for basis computation.
             Adapters that don't need it can ignore it.
         """
 

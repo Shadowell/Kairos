@@ -1,4 +1,4 @@
-"""Kairos — A-share fine-tuning & deployment toolkit for the Kronos foundation model.
+"""Kairos — crypto fine-tuning and deployment toolkit for Kronos.
 
 Exposes the most common entry points at package root::
 

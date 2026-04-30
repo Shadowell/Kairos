@@ -17,11 +17,11 @@
 
 ## 1. Repository Positioning
 
-Kairos is a **multi-market (A-shares + crypto) fine-tuning and deployment toolbox** for the [Kronos](https://github.com/shiyu-coder/Kronos) base model:
+Kairos is a **crypto spot and perpetual-swap fine-tuning and deployment toolbox** for the [Kronos](https://github.com/shiyu-coder/Kronos) base model:
 
-- **Data collection** — `kairos.data.collect` (dispatcher) + `kairos.data.markets.*` (one adapter per market, covering A-shares, crypto, and future extensions such as FX or gold)
+- **Data collection** — `kairos.data.collect` + `kairos.data.markets.crypto`, covering OKX-compatible spot and USDT-margined perpetual swaps
 - **Feature engineering** — `kairos.data.common_features` (24 common dimensions) + `adapter.market_features` (8 market-specific dimensions) = fixed 32-dimensional `EXOG_COLS`, with **no future-information leakage**
-- **Dataset packaging** — `kairos.data.prepare_dataset` (time-split / interleave-split; `--market` switches adapters; always writes `meta.json`)
+- **Dataset packaging** — `kairos.data.prepare_dataset` (time-split / interleave-split; always writes `meta.json`)
 - **Model** — `kairos.models.KronosWithExogenous` (Kronos + exogenous channel + quantile regression head; `n_exog=32` is fixed across markets)
 - **Training** — `kairos.training.train_predictor` (DDP + gradual unfreezing + early stopping) plus presets such as `kairos.training.config.preset_for("crypto-1min")`
 - **Evaluation** — `kairos.training.backtest_ic` (IC / Rank-IC / ICIR; supports `--aggregation date/hour/minute/none`, and recovers market/frequency from `meta.json`)
@@ -59,6 +59,7 @@ Kairos/
 │   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md # crypto data source/exchange/network configuration
 │   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md        # BTC+ETH 2 years spot predictor run log
 │   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 1 year spot predictor run log
+│   ├── CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md # OKX spot/perp exogenous factor and training plan
 │   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md # OKX perpetual multi-channel transformation plan
 │   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md # OKX perpetual Top10 30-day experiment post-mortem
 │   ├── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer fine-tuning and evaluation records
@@ -98,18 +99,18 @@ pip install "numpy<2" scipy      # numpy 2.x is not compatible with torch
 
 ### data pipeline
 ```bash
-# 1a) Collection - A-shares (default market=ashare, workers=1, mini_racer thread is not safe)
-kairos-collect --universe csi300 --freq daily \
-  --start 2018-01-01 --end 2026-04-17 --out ./raw/daily --workers 1
+# 1a) Collection — OKX spot
+kairos-collect --market-type spot \
+  --universe "BTC/USDT,ETH/USDT" --freq 1min \
+  --start 2026-04-01 --end 2026-04-30 \
+  --out ./raw/crypto/okx_spot_btc_eth_1min --workers 1
 
-# 1b) Collection — crypto (crypto extras need to be installed first)
-pip install -e '.[crypto]'
-# Default OKX perpetual (needs proxy or direct connection to OKX; funding/OI/basis available)
-kairos-collect --market crypto \
+# 1b) Collection — OKX perpetual swaps
+kairos-collect --market-type swap \
   --universe "BTC/USDT:USDT,ETH/USDT:USDT" --freq 1min \
-  --start 2023-01-01 --end 2025-01-01 \
-  --out ./raw/crypto/1min --workers 1 \
-  --proxy "${HTTPS_PROXY:-}"
+  --start 2026-04-01 --end 2026-04-30 \
+  --out ./raw/crypto/okx_swap_btc_eth_1min --workers 1 \
+  --crypto-extras funding,open_interest,spot,reference
 # Downgrade channel under the office network (Binance public image, only spot, no funding/OI/basis)
 kairos-collect --market crypto --exchange binance_vision \
   --universe "BTC/USDT,ETH/USDT" --freq 1min \
@@ -246,7 +247,7 @@ EOF
 |DDP cannot run on CPU|default nccl|`training_utils.setup_ddp` Automatically cut gloo|
 |The office network blocked OKX/Binance main site|GFW + Company Whitelist|Use `--exchange binance_vision` to go to the `data-api.binance.vision` spot mirror, which can only pull the spot K line (no funding/OI/basis)|
 |AutoDL is blocked by default `api.okx.com` / `fapi.binance.com`|DNS Pollution + Squid only whitelist github/hf for `/etc/network_turbo`|Install mihomo (Clash Meta) + airport subscription on AutoDL; get YAML from `flag=meta`; pre-download `Country.mmdb` + `GeoSite.dat` + `geoip.dat` and put it in the `-d` directory; the default GLOBAL is `DIRECT`, you need to use `PUT /proxies/GLOBAL` to switch to the specific node (the US node is the fastest measured, ~1.1s/req). See `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md` for complete steps|
-|`--market crypto` ran out `funding_rate` / `oi_change` / `basis` / `btc_dominance` All four columns are 0|`kairos-collect` only uses OHLCV, `prepare_dataset` does not pass `extras`, adapter’s `_align_series` fillna(0) for missing series|Either accept it (this is currently the case for BTC/ETH + Top100 spot runs), or go for `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md`’s multi-channel transformation|
+|Swap run has `funding_rate` / `oi_change` / `basis` all zero|`--crypto-extras` was not collected, sidecar parquet is missing, or OKX returned no historical coverage|Report sidecar coverage and rerun collection with `--crypto-extras funding,open_interest,spot,reference`; see `docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md`|
 |The parquet time range offset pulled out by `binance_vision`|`_to_unix_ms` Use naive local time to convert to UTC|Expected behavior, does not affect training for 24/7 crypto; if you really want accurate UTC date boundary, just manually transfer the complete ISO time|
 |The native macOS `torchrun --standalone` is stuck in a pile of `IPv6 ... gai error: 8` warnings for a long time|macOS fails to resolve the local hostname to IPv6, and the rendezvous server of `torchrun` hangs on the hostname and times out.|Single card/native machine does not use torchrun for smoke, just `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`; AutoDL/GPU machine still uses torchrun normally.|
 |When smoke `OneCycleLR` throws `ZeroDivisionError: float division by zero`|`total_steps = epochs * steps_per_epoch` If it is too small, `int(pct_start * total_steps)` degenerates to 0 and the phase boundaries coincide.|`KAIROS_SMOKE=1` has set `n_train_iter` to 200 and `warmup_pct=0.2` to ensure `total_steps ≥ ~50`; this lower limit must also be observed when customizing smoke|
@@ -266,12 +267,6 @@ See `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`'s "Common Pitfalls" section for more,
 ---
 
 ## 8. Training/backtest current baseline
-
-### A-shares daily line (ashare-daily)
-
-- **v1** (time-split, verified throughout 2024) → overfitting, test IC is negative.
-- **v2** (interleave-split + lower lr + increase quantile_weight + early stop) → val_ce improved, but test IC is still negative.
-- Conclusion: The correlation between supervision signals and A-shares’ future earnings is weak; the next step is written in `docs/TRAINING_TUNING_PLAYBOOK.md`.
 
 ### crypto 1min(crypto-1min)
 
@@ -294,7 +289,7 @@ When changing super parameters, always change `kairos/training/config.py` to `Tr
 
 1. `len(COMMON_EXOG_COLS) + len(adapter.MARKET_EXOG_COLS) == 32`——This must be maintained when adding a new adapter, `build_features` will directly assert and throw an error.
 2. `n_exog` on the model side is fixed at 32, and does not follow the adapter. If you want to add new factors, occupy pad or replace a certain slot, and do not expand the dimension.
-3. The new adapter must be able to be swallowed by `try/except ImportError` in `kairos/data/markets/__init__.py` after the import fails in an environment where optional dependencies such as `[crypto]` are not added, and the A-shares main path cannot be destroyed.
+3. Optional venue dependencies must fail gracefully at import time; command-line errors should happen only when the selected exchange is instantiated.
 4. `kairos-prepare` The output directory must contain `meta.json`, otherwise the downstream `backtest_ic --dataset-path ...` cannot restore market/freq.
 
 ---

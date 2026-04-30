@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kairos-kronos"
 version = "0.1.0"
-description = "Multi-market fine-tuning & deployment toolkit for the Kronos time-series foundation model"
+description = "Crypto spot and perpetual-swap fine-tuning toolkit for the Kronos time-series foundation model"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Kairos Contributors" }]
-keywords = ["kronos", "time-series", "finance", "crypto", "a-share", "akshare", "ccxt", "transformer"]
+keywords = ["kronos", "time-series", "finance", "crypto", "okx", "ccxt", "transformer"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -27,7 +27,8 @@ dependencies = [
     "tqdm>=4.65",
     "safetensors>=0.4",
     "huggingface_hub>=0.24",
-    "akshare>=1.14",
+    "ccxt>=4.3",
+    "python-dotenv>=1.0",
     "matplotlib>=3.7",
 ]
 

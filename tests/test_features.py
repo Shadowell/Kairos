@@ -28,7 +28,7 @@ def _synthetic_df(n: int = 300) -> pd.DataFrame:
 def test_build_features_shape():
     df = _synthetic_df()
     out = build_features(df)
-    # 所有外生列都在
+    # All exogenous columns are present.
     for col in EXOG_COLS:
         assert col in out.columns, f"missing {col}"
     assert out[EXOG_COLS].shape[1] == 32
@@ -37,7 +37,7 @@ def test_build_features_shape():
 def test_build_features_no_nan_after_warmup():
     df = _synthetic_df()
     out = build_features(df)
-    # 跳过前 60 行冷启动窗口后应该没有 NaN
+    # After the 60-row warm-up window there should be no NaNs.
     assert out[EXOG_COLS].iloc[60:].isna().sum().sum() == 0
 
 

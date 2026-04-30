@@ -1,14 +1,12 @@
-"""Helpers for the crypto "extras" channels (funding rate / OI / spot basis).
+"""Helpers for the crypto "extras" channels.
 
 Background
 ----------
 :class:`~kairos.data.markets.crypto.CryptoAdapter.market_features` expects to
-read funding / open-interest / spot-close / btc-dominance series from
-``FeatureContext.extras``. Until now no code path actually produced those
-extras — ``kairos-collect`` only dumped OHLCV parquet and
-``prepare_dataset`` never forwarded ``extras={...}`` to ``build_features``,
-so the five "data-driven" slots in ``MARKET_EXOG_COLS`` were silently zero
-in every crypto training run to date.
+read funding, open-interest, spot-close, and reference-close series from
+``FeatureContext.extras``. ``kairos-collect`` writes those channels under the
+raw data directory, and ``kairos-prepare`` loads them back when packaging a
+dataset.
 
 This module closes that gap. It defines a small on-disk layout and the
 read/write primitives both sides of the pipeline share.
@@ -28,7 +26,7 @@ Each perp-OHLCV run lives in its own directory, e.g.::
                 BTC_USDT-USDT.parquet    # columns: datetime, open_interest
             spot/
                 BTC_USDT-USDT.parquet    # columns: datetime, close (spot close)
-            btc_dominance.parquet        # optional, shared across symbols
+            reference.parquet            # optional BTC/USDT close reference
 
 Why separate parquet per kind
 -----------------------------
@@ -61,24 +59,24 @@ EXTRAS_DIRNAME = "_extras"
 # Canonical (kind, filename, payload column) tuples.
 #
 # The keys on the left (``funding``, ``open_interest``, ``spot``,
-# ``btc_dominance``) are what we write on disk and what the adapter reads back
+# ``reference``) are what we write on disk and what the adapter reads back
 # via ``load_for_symbol``. They are *not* the keys CryptoAdapter.market_features
 # ultimately consumes — ``load_for_symbol`` translates them to the adapter's
 # expected ``extras`` keys (``funding_rate`` / ``open_interest`` /
-# ``spot_close`` / ``btc_dominance``) at read time.
+# ``spot_close`` / ``reference_close``) at read time.
 # ---------------------------------------------------------------------------
 KIND_FUNDING = "funding"
 KIND_OI = "open_interest"
 KIND_SPOT = "spot"
-KIND_DOMINANCE = "btc_dominance"
+KIND_REFERENCE = "reference"
 
-ALL_KINDS = (KIND_FUNDING, KIND_OI, KIND_SPOT, KIND_DOMINANCE)
+ALL_KINDS = (KIND_FUNDING, KIND_OI, KIND_SPOT, KIND_REFERENCE)
 
 # Per-symbol channels are stored under _extras/<kind>/<stem>.parquet.
-# Market-wide channels (currently only btc_dominance) live as a single
+# Market-wide channels live as a single
 # _extras/<kind>.parquet.
 _PER_SYMBOL_KINDS = (KIND_FUNDING, KIND_OI, KIND_SPOT)
-_MARKET_WIDE_KINDS = (KIND_DOMINANCE,)
+_MARKET_WIDE_KINDS = (KIND_REFERENCE,)
 
 # Column name stored inside each parquet. Kept in one place so writers and
 # readers can't drift.
@@ -86,7 +84,7 @@ _PAYLOAD_COL: Dict[str, str] = {
     KIND_FUNDING: "funding_rate",
     KIND_OI: "open_interest",
     KIND_SPOT: "close",
-    KIND_DOMINANCE: "btc_dominance",
+    KIND_REFERENCE: "close",
 }
 
 # Translation from on-disk kind -> the extras key CryptoAdapter expects.
@@ -94,7 +92,7 @@ _EXTRAS_KEY: Dict[str, str] = {
     KIND_FUNDING: "funding_rate",
     KIND_OI: "open_interest",
     KIND_SPOT: "spot_close",
-    KIND_DOMINANCE: "btc_dominance",
+    KIND_REFERENCE: "reference_close",
 }
 
 
@@ -215,7 +213,7 @@ def save_market_wide(
     *,
     merge_existing: bool = True,
 ) -> Path:
-    """Write a market-wide channel (currently only ``btc_dominance``)."""
+    """Write a market-wide channel such as the BTC/USDT reference close."""
 
     payload = _PAYLOAD_COL[kind]
     normalised = _normalise(df, payload)
@@ -268,7 +266,7 @@ def load_for_symbol(
 
     Returns a dict keyed as :class:`CryptoAdapter.market_features` expects
     (``"funding_rate"`` / ``"open_interest"`` / ``"spot_close"`` /
-    ``"btc_dominance"``). Channels that have no parquet on disk are
+    ``"reference_close"``). Channels that have no parquet on disk are
     *absent* from the returned dict (not NaN-filled), so the adapter's
     existing NaN → 0 fallback still triggers for missing inputs.
     """
@@ -317,7 +315,7 @@ __all__ = [
     "KIND_FUNDING",
     "KIND_OI",
     "KIND_SPOT",
-    "KIND_DOMINANCE",
+    "KIND_REFERENCE",
     "ALL_KINDS",
     "extras_root",
     "per_symbol_path",

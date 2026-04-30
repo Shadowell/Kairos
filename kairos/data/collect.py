@@ -1,30 +1,22 @@
-"""Unified K-line collection entrypoint.
+"""Crypto K-line collection entrypoint.
 
-Previously this module was hard-wired to akshare / A-share. It is now a thin
-dispatcher that delegates the market-specific work to a
-:class:`~kairos.data.markets.base.MarketAdapter` chosen via ``--market``.
-
-Backwards compatibility
------------------------
-Calls that omit ``--market`` continue to behave exactly like before (A-shares
-via akshare), so existing docs and scripts keep working. The default universe,
-frequency, adjust option and output path are unchanged.
+This module delegates venue-specific work to the crypto
+:class:`~kairos.data.markets.base.MarketAdapter`. It supports spot and
+USDT-margined perpetual swap collection through ``--market-type``.
 
 Examples
 --------
 ::
 
-    # A-share daily (default, identical to previous behaviour)
-    kairos-collect --universe csi300 --freq daily \\
-        --start 2018-01-01 --end 2026-04-17 --out ./raw/daily
+    # OKX spot
+    kairos-collect --market-type spot --universe "BTC/USDT,ETH/USDT" \\
+        --freq 1min --start 2026-04-01 --out ./raw/crypto/spot_1min
 
-    # A-share 1min with explicit market flag
-    kairos-collect --market ashare --universe csi300 --freq 1min \\
-        --daily-append --out ./raw/1min
-
-    # Crypto (once the crypto adapter is installed)
-    kairos-collect --market crypto --universe top10 --freq 1min \\
-        --start 2023-01-01 --out ./raw/crypto/1min
+    # OKX USDT perpetual swaps with representative sidecars
+    kairos-collect --market-type swap \\
+        --universe "BTC/USDT:USDT,ETH/USDT:USDT" --freq 1min \\
+        --start 2026-04-01 --out ./raw/crypto/swap_1min \\
+        --crypto-extras funding,open_interest,spot,reference
 """
 
 from __future__ import annotations
@@ -106,7 +98,7 @@ def fetch_one(
             last_err = e
             time.sleep(pause * (2**attempt))
     else:
-        log.error(f"[{task.symbol}] 放弃: {last_err}")
+        log.error(f"[{task.symbol}] give up: {last_err}")
         return "fail"
 
     if df is None or df.empty:
@@ -186,7 +178,7 @@ def run_batch(
     symbols = list(symbols)
     extras_note = f" extras={extras_kinds}" if extras_kinds else ""
     log.info(
-        f"开始采集 {len(symbols)} 个标的 | market={adapter.name} | "
+        f"Collecting {len(symbols)} symbols | market={adapter.name} | "
         f"freq={freq} | {start} → {end} | adjust={adjust or 'none'} | "
         f"out={out_dir}{extras_note}"
     )
@@ -215,7 +207,7 @@ def run_batch(
             status = fut.result()
             counter[status] = counter.get(status, 0) + 1
 
-    log.info(f"完成: {counter}")
+    log.info(f"Done: {counter}")
 
 
 # ---------------------------------------------------------------------------
@@ -223,25 +215,25 @@ def run_batch(
 # ---------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="采集各市场 K 线数据（A 股 / 加密货币 / ...）"
+        description="Collect crypto OHLCV data from OKX-compatible adapters"
     )
     p.add_argument(
         "--market",
-        default="ashare",
-        help=f"市场 adapter，默认 ashare；可用: {available_adapters() or '<none>'}",
+        default="crypto",
+        help=f"Market adapter, default crypto; available: {available_adapters() or '<none>'}",
     )
     p.add_argument(
         "--universe",
-        default="csi300",
-        help="标的池名或逗号分隔列表；具体取值由所选 market 的 adapter 决定",
+        default="BTC/USDT:USDT,ETH/USDT:USDT",
+        help="Universe name such as top10 or a comma-separated symbol list",
     )
-    p.add_argument("--freq", default="daily")
-    p.add_argument("--start", default="2015-01-01")
+    p.add_argument("--freq", default="1min")
+    p.add_argument("--start", default="2026-04-01")
     p.add_argument("--end", default=datetime.now().strftime("%Y-%m-%d"))
     p.add_argument(
         "--adjust",
-        default="qfq",
-        help="复权方式（A 股专用），非 A 股市场可忽略",
+        default="",
+        help="Reserved compatibility option; ignored for crypto",
     )
     p.add_argument(
         "--proxy",
@@ -254,27 +246,31 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="crypto venue override, e.g. okx (default) / binance (when added)",
     )
-    p.add_argument("--out", default="./raw/daily")
+    p.add_argument(
+        "--market-type",
+        choices=["spot", "swap"],
+        default="swap",
+        help="Crypto instrument type: spot or USDT-margined perpetual swap",
+    )
+    p.add_argument("--out", default="./raw/crypto/okx_swap_1min")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument(
         "--daily-append",
         action="store_true",
-        help="断点续传 / 每日累积模式",
+        help="Resume/append mode",
     )
     p.add_argument(
         "--limit",
         type=int,
         default=0,
-        help=">0 时只抓前 N 个，用于 smoke test",
+        help="Only fetch the first N symbols when >0, for smoke tests",
     )
     p.add_argument(
         "--crypto-extras",
         default="",
-        help="crypto-only; comma-separated subset of "
-        "{funding,open_interest,spot,btc_dominance,all} to also fetch "
-        "alongside the main perp OHLCV. Sidecar parquet land under "
-        "<out>/_extras/<kind>/. Empty (default) keeps the previous "
-        "OHLCV-only behaviour.",
+        help="Comma-separated subset of {funding,open_interest,spot,reference,all} "
+        "to fetch alongside OHLCV. funding/open_interest/spot are swap-only; "
+        "reference is a market-wide BTC/USDT close sidecar under <out>/_extras/.",
     )
     return p.parse_args()
 
@@ -329,12 +325,14 @@ def main() -> None:
         adapter_kwargs["proxy"] = args.proxy
     if args.exchange:
         adapter_kwargs["exchange"] = args.exchange
+    if args.market == "crypto":
+        adapter_kwargs["market_type"] = args.market_type
     adapter = get_adapter(args.market, **adapter_kwargs)
 
     if args.freq not in adapter.supported_freqs:
         raise SystemExit(
-            f"market={adapter.name} 不支持 freq={args.freq}；"
-            f"可用: {list(adapter.supported_freqs)}"
+            f"market={adapter.name} does not support freq={args.freq}; "
+            f"available: {list(adapter.supported_freqs)}"
         )
 
     symbols = adapter.list_symbols(args.universe)
@@ -361,11 +359,11 @@ def main() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Backwards-compatible helpers (keep old imports working).
+# Convenience helper for programmatic universe resolution.
 # ---------------------------------------------------------------------------
 def get_universe(name: str) -> List[str]:
-    """Deprecated: use ``get_adapter("ashare").list_symbols(name)`` instead."""
-    return get_adapter("ashare").list_symbols(name)
+    """Resolve a crypto universe using the default adapter."""
+    return get_adapter("crypto").list_symbols(name)
 
 
 if __name__ == "__main__":

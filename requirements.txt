@@ -15,7 +15,8 @@ einops>=0.8
 tqdm>=4.65
 safetensors>=0.4
 huggingface_hub>=0.24
-akshare>=1.14
+ccxt>=4.3
+python-dotenv>=1.0
 matplotlib>=3.7
 
 # ---- optional: train (pip install -e '.[train]') ----
@@ -23,8 +24,7 @@ matplotlib>=3.7
 # comet-ml>=3.39
 
 # ---- optional: crypto (pip install -e '.[crypto]') ----
-# ccxt>=4.3
-# python-dotenv>=1.0
+# Crypto dependencies are part of core now; the extra is kept for compatibility.
 
 # ---- optional: serve (pip install -e '.[serve]') ----
 # fastapi>=0.110

@@ -1,4 +1,4 @@
-"""Fine-tune the Kronos BSQ tokenizer on K-line data (ashare / crypto / ...).
+"""Fine-tune the Kronos BSQ tokenizer on crypto K-line data.
 
 The tokenizer only needs ``x`` (the 6-dim OHLCV+amount window) — time stamps
 and the 32-dim exog features produced by ``kairos-prepare`` are ignored here.

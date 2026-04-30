@@ -37,9 +37,8 @@ from kairos.vendor.kronos import KronosTokenizer
 def _load_dataset_meta(dataset_path: str | Path) -> dict:
     """Load ``meta.json`` produced by ``kairos-prepare``.
 
-    Returns an empty dict if no manifest is present (e.g. for legacy
-    A-share bundles created before the multi-market refactor), which keeps
-    the backtest backward-compatible.
+    Returns an empty dict if no manifest is present, which keeps the backtest
+    backward-compatible with older prepared bundles.
     """
     path = Path(dataset_path) / "meta.json"
     if not path.exists():
@@ -105,11 +104,8 @@ def run_backtest(
     device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"[device] {device_t}")
 
-    # Pick an aggregation bucket. "auto" picks the bucket that keeps the
-    # cross-section non-trivial: daily bars on A-share → by calendar date;
-    # 1-minute crypto with a handful of symbols → also by calendar date
-    # (aggregating by minute would leave 1-2 rows per bucket). Advanced
-    # users can override this from the CLI.
+    # Pick an aggregation bucket. "auto" chooses a bucket that keeps the
+    # cross-section non-trivial; users can override this from the CLI.
     bucket_key = _BUCKET_ALIASES.get(aggregation.lower(), aggregation.lower())
     if bucket_key == "auto":
         if cfg.freq and cfg.freq.lower() in {"1min", "3min", "5min", "15min"}:
@@ -334,9 +330,9 @@ def main():
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--max-symbols", type=int, default=None)
     ap.add_argument("--market", default=None,
-                    help="override market preset (ashare/crypto/...); "
+                    help="override market preset (crypto); "
                          "default: read from dataset meta.json or fall back "
-                         "to the TrainConfig default (ashare).")
+                         "to the TrainConfig default (crypto).")
     ap.add_argument("--dataset-path", default=None,
                     help="override TrainConfig.dataset_path when pointing "
                          "the backtest at a specific prepared bundle")
