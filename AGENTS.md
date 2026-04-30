@@ -59,6 +59,7 @@ Kairos/
 │   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md        # BTC+ETH 两年现货 predictor 实验记录
 │   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 一年现货 predictor 实验记录
 │   ├── CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md # OKX 现货/永续外生因子训练计划
+│   ├── CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md # 5/15/30 统一窗口因子提案
 │   ├── CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md # OKX 永续多通道改造计划
 │   ├── CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md # OKX 永续 Top10 30 天实验复盘
 │   ├── CRYPTO_BTC_ETH_TOKENIZER_RUN.md      # BTC+ETH tokenizer 微调和评测记录

@@ -123,6 +123,7 @@ tests/        # pytest smoke 和特征测试
 | --- | --- |
 | 浏览文档地图 | [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md) |
 | 理解 OKX 现货/永续外生因子 | [docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md) |
+| 查看 5/15/30 统一窗口因子提案 | [docs/CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md](docs/CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md) |
 | 解释 IC 回测 | [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) |
 | 远程训练 | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
 | 阅读当前最佳实验 | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
