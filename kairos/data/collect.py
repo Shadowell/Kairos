@@ -23,21 +23,27 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from dataclasses import replace
+from datetime import datetime, timezone
+from numbers import Number
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Iterable, List, Optional
 
 import pandas as pd
 from tqdm import tqdm
 
+from .contracts import bar_delta
 from .markets import (
     FetchTask,
     MarketAdapter,
     available_adapters,
     get_adapter,
 )
+from .markets.crypto import _to_unix_ms
 
 
 logging.basicConfig(
@@ -54,10 +60,37 @@ log = logging.getLogger("collect")
 def _load_existing(path: Path) -> Optional[pd.DataFrame]:
     if not path.exists():
         return None
+    # An unreadable history is not an absent history: callers must not overwrite it.
+    return _normalize_datetimes(pd.read_parquet(path))
+
+
+def _normalize_datetimes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Canonical UTC-naive timestamps without changing caller-owned values."""
+    if not isinstance(frame, pd.DataFrame) or list(frame.columns).count("datetime") != 1:
+        raise ValueError("collected bars must have exactly one datetime column")
+    values = frame["datetime"]
+    if pd.api.types.is_numeric_dtype(values.dtype) or (
+        values.dtype == object and values.map(lambda value: isinstance(value, Number)).any()
+    ):
+        raise ValueError("datetime must contain timestamps, not numeric epoch values")
+    dates = pd.to_datetime(values, utc=True, format="mixed")
+    if dates.isna().any():
+        raise ValueError("datetime must not contain NaT or missing values")
+    result = frame.copy()
+    result["datetime"] = dates.dt.tz_localize(None)
+    return result
+
+
+def _save_main_parquet(frame: pd.DataFrame, path: Path) -> None:
+    """Publish a complete parquet atomically; failed writes leave history intact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(dir=path.parent, prefix=f".{path.stem}.", suffix=".parquet.tmp", delete=False) as handle:
+        temporary = Path(handle.name)
     try:
-        return pd.read_parquet(path)
-    except Exception:
-        return None
+        frame.to_parquet(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def fetch_one(
@@ -74,19 +107,36 @@ def fetch_one(
     ``fetch_extras`` (currently only the crypto adapter does), we also
     fetch auxiliary channels (funding / OI / spot basis) and drop them
     into the ``_extras/`` sidecar directory next to the main parquet.
-    Failures in the extras path never break the main OHLCV save — they
-    are logged and the task still returns ``"ok"`` if the primary fetch
-    succeeded.
+    Optional endpoint unavailability remains best effort. Requested sidecars
+    are validated and saved before publishing new OHLCV so a strict failure
+    does not advance the main cursor. Already-current OHLCV can backfill
+    requested sidecars over the original request without rewriting history.
     """
 
-    existing = _load_existing(task.out_path) if daily_append else None
+    try:
+        existing = _load_existing(task.out_path) if daily_append else None
+    except Exception as exc:  # noqa: BLE001
+        log.error(f"[{task.symbol}] invalid existing history; refusing overwrite: {exc}")
+        return "fail"
 
-    if existing is not None and not existing.empty:
-        last_dt = pd.to_datetime(existing["datetime"].max())
-        new_start = (last_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-        if new_start > task.end:
+    original_task = task
+    try:
+        new_start = pd.Timestamp(_to_unix_ms(task.start), unit="ms", tz="UTC")
+        end_exclusive = pd.Timestamp(_to_unix_ms(task.end, end_of_day=True), unit="ms", tz="UTC")
+        if existing is not None and not existing.empty:
+            next_bar = existing["datetime"].max().tz_localize("UTC") + bar_delta(task.freq)
+            new_start = max(new_start, next_bar)
+            task = replace(task, start=new_start.isoformat())
+        if new_start >= end_exclusive:
+            if extras_kinds and existing is not None and not existing.empty:
+                if not _fetch_and_save_extras(adapter, original_task, extras_kinds):
+                    log.error(f"[{task.symbol}] OHLCV unchanged; requested sidecar repair failed")
+                    return "fail"
+                return "ok"
             return "skip_up_to_date"
-        task = FetchTask(**{**task.__dict__, "start": new_start})
+    except (TypeError, ValueError, OverflowError) as exc:
+        log.error(f"[{task.symbol}] invalid collection window: {exc}")
+        return "fail"
 
     last_err: Optional[Exception] = None
     df: Optional[pd.DataFrame] = None
@@ -104,15 +154,30 @@ def fetch_one(
     if df is None or df.empty:
         return "empty"
 
-    if existing is not None and not existing.empty:
-        df = pd.concat([existing, df], ignore_index=True)
-        df = df.sort_values("datetime").drop_duplicates("datetime")
+    try:
+        df = _normalize_datetimes(df)
+        # Filter only newly fetched rows; a narrower request must not trim history.
+        dates = df["datetime"]
+        df = df.loc[(dates >= new_start.tz_localize(None)) & (dates < end_exclusive.tz_localize(None))]
+        if df.empty:
+            return "empty"
+        if existing is not None and not existing.empty:
+            df = pd.concat([existing, df], ignore_index=True)
+        # Stable ordering makes an existing row win over any repeated response row.
+        df = df.sort_values("datetime", kind="stable").drop_duplicates("datetime", keep="first")
+    except (TypeError, ValueError, OverflowError) as exc:
+        log.error(f"[{task.symbol}] invalid fetched bars; preserving history: {exc}")
+        return "fail"
 
-    task.out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(task.out_path, index=False)
+    if extras_kinds and not _fetch_and_save_extras(adapter, task, extras_kinds):
+        log.error(f"[{task.symbol}] OHLCV unchanged; requested sidecar validation or persistence failed")
+        return "fail"
 
-    if extras_kinds:
-        _fetch_and_save_extras(adapter, task, extras_kinds)
+    try:
+        _save_main_parquet(df, task.out_path)
+    except Exception as exc:  # noqa: BLE001
+        log.error(f"[{task.symbol}] OHLCV save failed; existing history preserved: {exc}")
+        return "fail"
 
     return "ok"
 
@@ -121,13 +186,8 @@ def _fetch_and_save_extras(
     adapter: MarketAdapter,
     task: FetchTask,
     kinds: List[str],
-) -> None:
-    """Best-effort auxiliary-channel fetch for crypto.
-
-    Exceptions are logged and swallowed: the main OHLCV save is already
-    on disk, and a missing extras parquet degrades gracefully to the
-    adapter's NaN → 0 fallback at training time.
-    """
+) -> bool:
+    """Fetch optional channels; report validation and persistence failures."""
 
     hook = getattr(adapter, "fetch_extras", None)
     if hook is None:
@@ -135,21 +195,25 @@ def _fetch_and_save_extras(
             f"adapter {adapter.name!r} has no fetch_extras; "
             f"ignoring --crypto-extras={kinds}"
         )
-        return
+        return True
 
     try:
         extras = hook(task, kinds=kinds)
+    except (TypeError, ValueError, KeyError) as exc:
+        log.error(f"[{task.symbol}] extras validation failed: {exc}")
+        return False
     except Exception as e:  # noqa: BLE001
         log.warning(f"[{task.symbol}] extras fetch failed: {e}")
-        return
+        return True
 
     if not extras:
-        return
+        return True
 
     from .markets.base import sanitize_symbol
     from . import crypto_extras as _ce
 
     stem = sanitize_symbol(task.symbol)
+    succeeded = True
     for kind, df in extras.items():
         try:
             if kind in _ce._PER_SYMBOL_KINDS:  # type: ignore[attr-defined]
@@ -157,7 +221,9 @@ def _fetch_and_save_extras(
             elif kind in _ce._MARKET_WIDE_KINDS:  # type: ignore[attr-defined]
                 _ce.save_market_wide(task.out_dir, kind, df)
         except Exception as e:  # noqa: BLE001
-            log.warning(f"[{task.symbol}] save {kind} extras failed: {e}")
+            log.error(f"[{task.symbol}] save {kind} extras failed: {e}")
+            succeeded = False
+    return succeeded
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +240,7 @@ def run_batch(
     workers: int = 4,
     daily_append: bool = False,
     extras_kinds: Optional[List[str]] = None,
-) -> None:
+) -> dict[str, int]:
     symbols = list(symbols)
     extras_note = f" extras={extras_kinds}" if extras_kinds else ""
     log.info(
@@ -208,6 +274,7 @@ def run_batch(
             counter[status] = counter.get(status, 0) + 1
 
     log.info(f"Done: {counter}")
+    return counter
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--freq", default="1min")
     p.add_argument("--start", default="2026-04-01")
-    p.add_argument("--end", default=datetime.now().strftime("%Y-%m-%d"))
+    p.add_argument("--end", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     p.add_argument(
         "--adjust",
         default="",
@@ -344,7 +411,7 @@ def main() -> None:
 
     extras_kinds = _resolve_extras_kinds(args.crypto_extras, args.market)
 
-    run_batch(
+    counter = run_batch(
         adapter=adapter,
         symbols=symbols,
         freq=args.freq,
@@ -356,6 +423,8 @@ def main() -> None:
         daily_append=args.daily_append,
         extras_kinds=extras_kinds,
     )
+    if counter["fail"] > 0:
+        raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
