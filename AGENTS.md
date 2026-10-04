@@ -7,7 +7,7 @@
 
 ## 0. TL;DR — 最重要的 5 条
 
-1. **Working directory**: `/Users/jie.feng/wlb/Kairos`, remote `origin = https://github.com/Shadowell/Kairos.git`, main branch `main`.
+1. **Working directory**: `/Users/jie.feng/Dev/Github/Private/Kairos`, remote `origin = https://github.com/Shadowell/Kairos.git`, main branch `main`.
 2. **`git add -A && git commit && git push`** immediately after modifying the code, there is no need to ask for user consent again (see §6).
 3. **Answers must be in Chinese** (User Rules).
 4. **File operation**: Use Read/Grep/Glob for reading, StrReplace/Write for editing, **Do not use `cat/sed/awk/echo >`** instead.
@@ -117,7 +117,7 @@ kairos-collect --market crypto --exchange binance_vision \
   --start 2024-01-01 --end 2024-02-01 \
   --out ./raw/crypto/bv_1min --workers 1
 
-# 2) 打包数据集（v2 默认 interleave split）
+# 2) 打包数据集（默认 time；以下显式使用 interleave）
 kairos-prepare --raw ./raw/daily --out ./finetune/data/processed_datasets \
   --train 2018-01-01:2023-12-31 --val 2024-01-01:2024-12-31 \
   --test 2025-01-01:2026-04-17 \
@@ -248,15 +248,15 @@ EOF
 |办公网无法访问 OKX/Binance 主站|GFW + 公司白名单|使用 `--exchange binance_vision` 走 `data-api.binance.vision` 现货镜像；只能拉现货 K 线，无 funding/OI/basis|
 |AutoDL is blocked by default `api.okx.com` / `fapi.binance.com`|DNS Pollution + Squid only whitelist github/hf for `/etc/network_turbo`|Install mihomo (Clash Meta) + airport subscription on AutoDL; get YAML from `flag=meta`; pre-download `Country.mmdb` + `GeoSite.dat` + `geoip.dat` and put it in the `-d` directory; the default GLOBAL is `DIRECT`, you need to use `PUT /proxies/GLOBAL` to switch to the specific node (the US node is the fastest measured, ~1.1s/req). See `docs/CRYPTO_OKX_PERP_MULTICHANNEL_PLAN.md` for complete steps|
 |永续实验中 `funding_rate` / `oi_change` / `basis` 全为 0|没有采集 `--crypto-extras`，sidecar parquet 缺失，或 OKX 没有返回对应历史覆盖|报告 sidecar 覆盖率，并用 `--crypto-extras funding,open_interest,spot,reference` 重新采集；见 `docs/CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md`|
-|The parquet time range offset pulled out by `binance_vision`|`_to_unix_ms` Use naive local time to convert to UTC|Expected behavior, does not affect training for 24/7 crypto; if you really want accurate UTC date boundary, just manually transfer the complete ISO time|
+|采集日期随本机时区偏移|旧版无时区 datetime 使用本机时区转 epoch|2026-10-04 修复：无时区输入按 UTC；裸日期结束端包含整日，显式时刻不扩展|
 |The native macOS `torchrun --standalone` is stuck in a pile of `IPv6 ... gai error: 8` warnings for a long time|macOS fails to resolve the local hostname to IPv6, and the rendezvous server of `torchrun` hangs on the hostname and times out.|Single card/native machine does not use torchrun for smoke, just `MASTER_ADDR=127.0.0.1 MASTER_PORT=295xx WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 python -m kairos.training.train_predictor`; AutoDL/GPU machine still uses torchrun normally.|
 |When smoke `OneCycleLR` throws `ZeroDivisionError: float division by zero`|`total_steps = epochs * steps_per_epoch` If it is too small, `int(pct_start * total_steps)` degenerates to 0 and the phase boundaries coincide.|`KAIROS_SMOKE=1` has set `n_train_iter` to 200 and `warmup_pct=0.2` to ensure `total_steps ≥ ~50`; this lower limit must also be observed when customizing smoke|
 |`backtest_ic --per-symbol-limit` After running `by_date_mean.ic` all are `NaN`|Each symbol is independently and equidistantly sampled, and the timestamps extracted are not aligned → there is only 1 record in each bucket, and the cross-sectional correlation coefficient cannot be calculated.|Smoke can use `--aggregation none` to see the overall; to check the bucket IC on a small number of symbols, either `--stride 60` let all symbols use the same set of offsets, or directly run the GPU with full stride=1|
 | `ccxt.base.errors.InvalidProxySettings: okx you have multiple conflicting proxy settings(httpProxy,httpsProxy)` |`check_proxy_settings` with ccxt ≥ 4.5 is not allowed to set `http_proxy` + `https_proxy` at the same time; earlier versions of OKX adapter have both blocked|`kairos/data/markets/crypto_exchanges/okx.py` Now only set up `https_proxy` (commit `9e33a2f`), OKX uses all HTTPS; when writing a new adapter, be careful to only leave the https side.|
 |`[<sym>] funding fetch failed: 'timestamp'` or OI `50030 Illegal time range`|The `since` kwarg of ccxt is ignored by the server on the OKX funding-history / OI interface → the latest data returned is filtered to empty by `[start_ms,end_ms)` → subsequent `df["timestamp"]` KeyError|adapter is now changed to `params={"after": cursor}` to check funding, `params={"begin":...,"end":...}` to check OI (commit `05b8595`); at the same time, empty frame retains `funding_rate`/`open_interest` columns to avoid KeyError|
 |OKX funding / OI 历史窗口较短|OKX API 有硬保留限制：funding-rate-history 约 90 天；contracts/open-interest-history 只返回较短近期窗口，`after` cursor 对该端点不一定生效|**funding**：近 90 天通常可用于训练，旧窗口为空要接受或改用 Coinglass；**OI**：长窗口需要自己实时订阅累积或使用付费历史源，短窗口 smoke 可用，但必须在文档中标注覆盖率|
-|`kairos-prepare --train 2026-04-13:2026-04-13` Each symbol is packaged into only **1 line**|`_slice` uses `(datetime >= start) & (datetime <= end)`, `end="2026-04-13"` is parsed into `2026-04-13 00:00:00`, and the minute-level data only has one hit at 00:00|For minute-level data `--train/--val/--test`, you need to pass "next day" as end (`2026-04-13:2026-04-14` means covering the whole day from 04-13), or pass the complete ISO timestamp (be careful not to have 3 colons, `parse_range` use `:` to hard cut)|
-|`kairos-prepare --train "2026-04-13 08:00:2026-04-14 08:00"` reported `too many values to unpack (expected 2)`|`parse_range` Directly `split(":")`, the ISO time with `HH:MM` has too many colons|The current solution is to avoid writing ISO time in the CLI and return to the daily granularity `YYYY-MM-DD:YYYY-MM-DD`; a better solution is to subsequently change parse to rsplit or change the separator|
+|分钟数据的结束日只剩零点一行|旧版 `_slice` 将结束日期当零点|2026-10-04 修复：裸日期结束端包含整日；单日直接用 `2026-04-13:2026-04-13`，不要再手动增加一天|
+|带时分的训练范围解析失败|旧版按所有冒号分割|2026-10-04 修复：支持 ISO 时间及偏移；显式时间结束点包含，三个 time split 不得重叠|
 |The training log shows `[TRAIN] pool=327610, using 5000/epoch.`, val_ce only dropped by 0.006 after 10 epochs, and negative migration occurred in backtest|`KAIROS_N_TRAIN_ITER=5000` was left in the previous mini run, but was not cleared in the official run → Only 5000 samples are randomly selected per epoch = 1.5% of the pool|**Before officially running `unset KAIROS_N_TRAIN_ITER`** let it run default 50000; self-check to see if the proportion of `using Y/X` is ≥ 5%. See `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` §8.1 for details|
 |`backtest_ic --aggregation date` Output `n_dates: 3, icir: +1.17` (looks good but something is wrong)|The test area only has 3 days → the date bucket has only 3 ICs to calculate mean/std, and the ICIR is completely noise|If the test area is < 5 days, use `--aggregation none` to view `overall.spearman`; if the test area is ≥ 15 days, use `by_date_mean`. For the complete decision tree, see `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §2|
 |`--baseline` ran out h30 ICIR=+0.42, looking at the original weight of Kronos, there is alpha|Random head + Kronos hidden can produce an artificially high ICIR under the scale of 100 symbols × 78 days|**MUST** report both baseline and finetuned, looking at Δ rather than absolute values. See `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §5 for details|
@@ -306,3 +306,8 @@ Tokenizer training ≈ 4M parameters, batch=50, epochs=15 + patience=3, lr=2e-4,
 
 - The **long-term agreement** given by the user in the conversation (for example, Article 6.1 of this document is extracted from the user's "commit + push after each modification") should be settled here.
 - Changing `AGENTS.md` itself also applies to the rules in Section 6: commit + push immediately after making changes.
+
+## 11. Spec Kit
+
+项目使用 Spec Kit 1.0.6；入口为 `.specify/memory/constitution.md` 和 `.agents/skills/speckit-*/SKILL.md`。
+按 specify → clarify → plan → tasks → analyze → implement → converge 推进；小修复只保留必要的 spec/plan/tasks，验证后遵守 §6 提交与推送。

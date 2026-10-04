@@ -297,7 +297,10 @@ def test_crypto_adapter_fetch_extras_returns_per_kind(monkeypatch):
 
     funding = extras[ce.KIND_FUNDING]
     assert "datetime" in funding.columns and "funding_rate" in funding.columns
-    assert len(funding) == 3
+    # The first canned settlement is 2023-11-14 22:13:20 UTC, outside
+    # the requested window (the old local-time conversion included it).
+    assert len(funding) == 2
+    assert funding["datetime"].min() >= pd.Timestamp("2023-11-15")
 
     oi = extras[ce.KIND_OI]
     assert "datetime" in oi.columns and "open_interest" in oi.columns

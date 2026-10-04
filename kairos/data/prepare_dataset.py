@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
-from datetime import datetime
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -37,19 +37,40 @@ import pandas as pd
 from tqdm import tqdm
 
 from kairos.data.features import build_features, exog_cols_for
-from kairos.data.markets import sanitize_symbol
 
 
 KRONOS_FEATURES = ["open", "high", "low", "close", "vol", "amt"]
 
 
 def parse_range(s: str) -> tuple[str, str]:
-    a, b = s.split(":")
-    return a.strip(), b.strip()
+    # Only the colon preceding the second ISO date separates the endpoints.
+    parts = re.split(r":(?=\s*\d{4}-\d{2}-\d{2}(?:[T\s]|$))", s.strip())
+    if len(parts) != 2:
+        raise ValueError("expected START:END with ISO dates or timestamps")
+    start, end = (part.strip() for part in parts)
+    _range_bounds(start, end)
+    return start, end
+
+
+def _range_bounds(start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Inclusive UTC bounds; a bare end date covers its entire day."""
+    lower = pd.Timestamp(start)
+    upper = pd.Timestamp(end)
+    if pd.isna(lower) or pd.isna(upper):
+        raise ValueError("range endpoints must be valid dates or timestamps")
+    lower = lower.tz_localize("UTC") if lower.tzinfo is None else lower.tz_convert("UTC")
+    upper = upper.tz_localize("UTC") if upper.tzinfo is None else upper.tz_convert("UTC")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", end):
+        upper += pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    if lower > upper:
+        raise ValueError("range start must not be after end")
+    return lower, upper
 
 
 def _slice(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    mask = (df["datetime"] >= start) & (df["datetime"] <= end)
+    lower, upper = _range_bounds(start, end)
+    dates = pd.to_datetime(df["datetime"], utc=True)
+    mask = (dates >= lower) & (dates <= upper)
     return df.loc[mask].reset_index(drop=True)
 
 
@@ -110,8 +131,10 @@ def process_symbol(
 
     # Some venues do not return quote amount; close*volume is a usable fallback
     # for Kronos' volume-scale channel after OHLCV normalization.
-    if "amount" in df.columns and df["amount"].isna().all():
+    if "amount" not in df.columns:
         df["amount"] = df["close"] * df["volume"]
+    else:
+        df["amount"] = df["amount"].fillna(df["close"] * df["volume"])
 
     df = build_features(
         df, index_df, market=market, symbol=path.stem, extras=extras,
@@ -128,8 +151,10 @@ def process_symbol(
 
     if split_mode == "interleave":
         # Merge train+val into the fit window, then sample validation blocks.
-        fit_start = min(train_range[0], val_range[0])
-        fit_end = max(train_range[1], val_range[1])
+        train_bounds = _range_bounds(*train_range)
+        val_bounds = _range_bounds(*val_range)
+        fit_start = min(train_bounds[0], val_bounds[0]).isoformat()
+        fit_end = max(train_bounds[1], val_bounds[1]).isoformat()
         fit_df = _slice(df.reset_index(), fit_start, fit_end)
         test_df = _slice(df.reset_index(), *test_range)
         if rng is None:
@@ -191,12 +216,27 @@ def main():
                     help="Optional metadata tag for crypto datasets")
     args = ap.parse_args()
 
+    try:
+        ranges = {name: parse_range(getattr(args, name)) for name in ("train", "val", "test")}
+        bounds = {name: _range_bounds(*value) for name, value in ranges.items()}
+    except (ValueError, TypeError) as exc:
+        ap.error(f"invalid date range: {exc}")
+    if args.split_mode == "interleave":
+        bounds = {
+            "fit": (min(bounds["train"][0], bounds["val"][0]),
+                    max(bounds["train"][1], bounds["val"][1])),
+            "test": bounds["test"],
+        }
+    ordered = sorted(bounds.items(), key=lambda item: item[1][0])
+    for (left, (_, left_end)), (right, (right_start, _)) in zip(ordered, ordered[1:]):
+        if right_start <= left_end:
+            ap.error(f"date ranges overlap: {left} and {right}")
+
     exog_cols = exog_cols_for(args.market)
     print(f"[market] {args.market}; exog_dim={len(exog_cols)}")
 
     raw_dir = Path(args.raw).expanduser().resolve()
     out_dir = Path(args.out).expanduser().resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     index_df = None
     if args.raw_index:
@@ -213,6 +253,8 @@ def main():
     )
     if args.limit > 0:
         paths = paths[: args.limit]
+    if not paths:
+        ap.error(f"no parquet input files found in {raw_dir}")
     print(f"{len(paths)} symbols to process")
 
     # Crypto: pick up the sidecar funding/OI/spot/reference parquet that
@@ -256,9 +298,9 @@ def main():
         try:
             pieces = process_symbol(
                 p, index_df,
-                parse_range(args.train),
-                parse_range(args.val),
-                parse_range(args.test),
+                ranges["train"],
+                ranges["val"],
+                ranges["test"],
                 min_len=args.min_len,
                 split_mode=args.split_mode,
                 interleave_val_ratio=args.val_ratio,
@@ -282,6 +324,12 @@ def main():
         if "test" in pieces:
             test_data[sym] = pieces["test"]["main"]
             exog_test[sym] = pieces["test"]["exog"]
+
+    missing = [name for name, data in (("train", train_data), ("val", val_data),
+                                      ("test", test_data)) if not data]
+    if missing:
+        ap.error(f"no usable data for splits: {', '.join(missing)}; output not written")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     def _dump(obj, name):
         with open(out_dir / name, "wb") as f:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
 import numpy as np
@@ -517,13 +517,16 @@ class CryptoAdapter(MarketAdapter):
 # ---------------------------------------------------------------------------
 def _to_unix_ms(value: str | datetime, end_of_day: bool = False) -> int:
     """Parse ``YYYY-MM-DD`` / datetime to millisecond unix timestamp (UTC)."""
+    date_only = isinstance(value, str) and len(value.strip()) == 10
     if isinstance(value, datetime):
         ts = value
     else:
-        ts = datetime.fromisoformat(value.replace("/", "-"))
-    if end_of_day and ts.hour == 0 and ts.minute == 0 and ts.second == 0:
-        # Treat a bare date as inclusive of the whole day.
-        ts = ts.replace(hour=23, minute=59, second=59, microsecond=999_000)
+        ts = datetime.fromisoformat(value.strip().replace("/", "-").replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    if end_of_day and date_only:
+        # Exchange fetchers use [start_ms, end_ms), so include the full day.
+        ts += timedelta(days=1)
     return int(ts.timestamp() * 1000)
 
 

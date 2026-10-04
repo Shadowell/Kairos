@@ -83,6 +83,12 @@ kairos-prepare --market crypto --market-type swap \
   --out ./finetune/data/crypto_swap_btc_eth_1min
 ```
 
+日期窗口按 UTC 解释；`2026-04-13:2026-04-13` 包含当天全部分钟数据。
+也支持精确时间，例如 `--train "2026-04-13T08:00:00+08:00:2026-04-14T07:59:00+08:00"`；
+显式时间结束点包含在内。time 模式的 train/val/test 必须互不重叠；interleave 模式的合并训练验证窗口不能与 test 重叠。
+缺失成交额按 `close * volume` 逐行补齐。输入为空、范围无效或任一 split 无可用数据时，命令非零退出且不写输出。
+采集命令同样以 UTC 解释无时区时间；裸日期 `--end` 覆盖整日，显式时刻则为排除边界。
+
 ### 训练和回测
 
 ```bash
