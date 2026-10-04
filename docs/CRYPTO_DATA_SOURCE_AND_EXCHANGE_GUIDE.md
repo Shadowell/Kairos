@@ -1,5 +1,11 @@
 # Crypto data source and exchange access guide
 
+> 2026-10-05 数据入口约定：`--daily-append` 按最后一根 bar 的下一原生频率步长续采（1min/5min/1h/1d），统一使用 UTC；裸日期 `--end` 覆盖整日，显式时刻为排除边界。已有文件损坏或时间列非法时明确失败，保留原文件；无新增数据时不重写历史。
+> 增量模式只补尾部，不会自动修复已有内部缺口。内部缺口应先采集到独立目录并审查合并，避免直接覆盖历史文件。
+> sidecar 与主 K 线按同一绝对 UTC 时间对齐，只向前使用已发生观测；缺失/空通道允许降级，已提供的无效或冲突时间数据会明确报错，不能静默变成零因子。
+> 显式请求的 sidecar 验证/保存失败时，不推进主行情文件，修复原因后可用同一续采命令重试。主行情已经完整时，仍可按原请求范围补齐 sidecar，主文件保持不变；可选接口网络不可用仍记录降级信息。批次中存在明确失败时，采集 CLI 返回非零退出码。
+
+
 > This document explains how Kairos' crypto data layer works: which exchange is connected by default, how to collect data in different network environments, and how to extend to new exchange backends.
 
 Kairos supports crypto markets out of the box through a pluggable exchange
@@ -221,7 +227,7 @@ See `crypto_exchanges/okx.py` for the reference implementation.
 | `403 Forbidden` / timeouts | Network blocks OKX (common in corporate / office networks) | Set a proxy or move to a home / cloud runner |
 | `unknown crypto universe` | Passed an A-share style universe name | Use `topN`, a single symbol, or a comma-separated list |
 | `freq '1min' not supported for crypto` | Typo / unsupported freq | Run `kairos-collect --help` and pick from §4.4 |
-| Fewer bars than expected | OKX returns empty pages during upstream outages; we stop after 3 in a row | Re-run with `--daily-append` to top up missing windows |
+| Fewer bars than expected | OKX returns empty pages during upstream outages; we stop after 3 in a row | Use `--daily-append` only for the missing tail; collect internal gaps separately and review before merging |
 
 ---
 

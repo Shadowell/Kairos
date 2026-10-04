@@ -1,5 +1,9 @@
 # Kairos Training Participation Troubleshooting Manual
 
+> 多 horizon 损失平衡（2026-10-05）：默认 `KAIROS_RETURN_LOSS_WEIGHTING=inverse_volatility`。在训练开始前，从全局有效训练窗口池按固定 seed 无放回取最多 4096 个窗口，对各期限原始 log-return 计算标准差；`1/max(std_h, floor)` 再归一为均值 1，作为 pinball 的期限权重。训练和验证固定共用该权重，预测值仍为原始 log-return；验证集和测试集不参与估计。
+> `KAIROS_RETURN_SCALE_SAMPLES` 控制估计样本上限，`KAIROS_RETURN_SCALE_FLOOR` 默认 `1e-6`，`KAIROS_RETURN_LOSS_WEIGHTING=uniform` 用于等权对照。模型包记录实际权重、标准差、样本数和 seed；缺少这些字段的旧 v2 包明确识别为历史等权，不改写原包。不同损失口径的验证值不可直接比较。
+
+
 > Tokenizer 集成更新：每个 loader batch 更新一次；`accumulation_steps` 只决定批内分块，尾块完整保留并按样本数加权，非末块使用 DDP no_sync。BSQ 的批内熵依赖分块，不能把它视为与整批完全等价。跨 rank 使用相同的 epoch 采样映射，Tokenizer 仅要求主通道文件。
 > 2026-10-05 契约更新：新版 predictor 在最后历史 bar 上监督原始 log-return 的 h=1..H，
 > 以 CE + pinball 联合验证损失选模。mask 按有效 horizon/quantile 元素归一化，旧权重系数与旧 CE 选模结果不直接可比。
