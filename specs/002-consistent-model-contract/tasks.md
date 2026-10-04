@@ -18,3 +18,10 @@
 
 ## Dependencies
 T001 后数据、训练、回测可按已确定接口并行；T006/T008 依赖共享契约；最后统一 T009/T010。
+
+## Phase 6: Convergence — Tokenizer integration
+- [x] T011 根据 FR-002 在 train_tokenizer.py 使用跨 rank 相同的 epoch 采样映射。
+- [x] T012 在 train_tokenizer.py 集成独立 Issue #7 的完整批内分块、按样本加权和 no_sync（FR-004），保留 v2 predictor 实现。
+- [x] T013 在 tests/test_tokenizer_accumulation.py 验证不整除尾块、跨 rank epoch 与实际双进程同步，核对全量回归。
+- [x] T014 修复 Tokenizer 非零 rank 的 best 状态（FR-004）与无需 exog 的主通道兼容，跑真实小模型 CPU smoke；记录 BSQ 分块语义。
+- [x] T015 审查发现 Tokenizer 空验证集可被误报为最佳值 0：增加空 loader 和非有限验证损失拒绝回归，满足 FR-004。

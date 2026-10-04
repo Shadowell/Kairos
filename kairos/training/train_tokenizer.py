@@ -23,8 +23,11 @@ can drive both stages.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from time import gmtime, strftime
 
@@ -48,20 +51,30 @@ from kairos.vendor.kronos import KronosTokenizer
 
 
 def _make_loaders(cfg: TrainConfig, rank: int, world: int):
-    train = AShareKronosDataset("train", cfg)
-    val = AShareKronosDataset("val", cfg)
+    # Tokenizer reconstruction consumes only the main channel. Predictor-side
+    # strict exogenous validation must not require unused files for this stage.
+    data_cfg = replace(cfg, use_exog=False)
+    train = AShareKronosDataset("train", data_cfg)
+    val = AShareKronosDataset("val", data_cfg)
     t_sampler = DistributedSampler(train, num_replicas=world, rank=rank, shuffle=True)
     v_sampler = DistributedSampler(val, num_replicas=world, rank=rank, shuffle=False)
     t_loader = DataLoader(train, batch_size=cfg.batch_size, sampler=t_sampler,
-                          num_workers=cfg.num_workers, pin_memory=True, drop_last=True)
+                          num_workers=cfg.num_workers, pin_memory=torch.cuda.is_available(), drop_last=True)
     v_loader = DataLoader(val, batch_size=cfg.batch_size, sampler=v_sampler,
-                          num_workers=cfg.num_workers, pin_memory=True, drop_last=False)
+                          num_workers=cfg.num_workers, pin_memory=torch.cuda.is_available(), drop_last=False)
     return t_loader, v_loader, train, val
 
 
 def _train(model, device, cfg: TrainConfig, save_dir: Path, rank: int, world: int):
     t0 = time.time()
+    accum = cfg.accumulation_steps
+    if accum < 1 or cfg.epochs < 1:
+        raise ValueError("epochs and accumulation_steps must be positive")
     t_loader, v_loader, t_ds, v_ds = _make_loaders(cfg, rank, world)
+    sizes = torch.tensor([len(t_loader), len(v_loader)], device=device)
+    dist.all_reduce(sizes, op=dist.ReduceOp.MIN)
+    if (sizes == 0).any():
+        raise ValueError("empty training or validation loader; check window and batch settings")
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(
@@ -85,34 +98,31 @@ def _train(model, device, cfg: TrainConfig, save_dir: Path, rank: int, world: in
         ep_t0 = time.time()
         model.train()
         t_loader.sampler.set_epoch(ep)
-        t_ds.set_epoch_seed(ep * 10000 + rank)
+        t_ds.set_epoch_seed(ep)
         v_ds.set_epoch_seed(0)
 
         for i, (x, _stamp, _exog) in enumerate(t_loader):
             x = x.to(device, non_blocking=True)
-            accum = max(1, cfg.accumulation_steps)
             total_loss = 0.0
-            size = x.shape[0] // accum
-            if size == 0:
-                size = x.shape[0]
-                accum = 1
-            for j in range(accum):
-                chunk = x[j * size : (j + 1) * size]
-                if chunk.size(0) == 0:
-                    continue
-                (z_pre, z), bsq_loss, _, _ = model(chunk)
-                recon = F.mse_loss(z_pre, chunk) + F.mse_loss(z, chunk)
-                loss = (recon + bsq_loss) / 2
-                total_loss += loss.item()
-                (loss / accum).backward()
+            chunks = x.tensor_split(min(accum, x.size(0)))
+            opt.zero_grad(set_to_none=True)
+            for j, chunk in enumerate(chunks):
+                sync_context = nullcontext() if j == len(chunks) - 1 else model.no_sync()
+                with sync_context:
+                    (z_pre, z), bsq_loss, _, _ = model(chunk)
+                    recon = F.mse_loss(z_pre, chunk) + F.mse_loss(z, chunk)
+                    loss = (recon + bsq_loss) / 2
+                    weight = chunk.size(0) / x.size(0)
+                    total_loss += loss.item() * weight
+                    (loss * weight).backward()
 
             torch.nn.utils.clip_grad_norm_(params, max_norm=2.0)
-            opt.step(); sch.step(); opt.zero_grad()
+            opt.step(); sch.step()
 
             if rank == 0 and (step_g + 1) % cfg.log_interval == 0:
                 print(f"[ep {ep+1}/{cfg.epochs} step {i+1}/{len(t_loader)}] "
                       f"lr={opt.param_groups[0]['lr']:.2e} "
-                      f"loss={total_loss / accum:.4f}")
+                      f"loss={total_loss:.4f}")
             step_g += 1
 
         # --- validation: MSE of the full-codebook reconstruction ---
@@ -127,14 +137,19 @@ def _train(model, device, cfg: TrainConfig, save_dir: Path, rank: int, world: in
         ls = torch.tensor(loss_sum, device=device)
         cn = torch.tensor(count, device=device)
         dist.all_reduce(ls); dist.all_reduce(cn)
-        val = (ls / cn).item() if cn.item() else 0.0
+        if cn.item() == 0:
+            raise ValueError("empty validation set cannot select a best tokenizer")
+        val = (ls / cn).item()
+        if not math.isfinite(val):
+            raise ValueError("non-finite tokenizer validation loss")
 
         improved = val < best - 1e-6
+        if improved:
+            best = val
         if rank == 0:
             print(f"--- ep {ep+1}: val_recon={val:.6f} "
                   f"({format_time(time.time() - ep_t0)} / total {format_time(time.time() - t0)}) ---")
             if improved:
-                best = val
                 save = save_dir / "checkpoints" / "best_model"
                 (model.module if hasattr(model, "module") else model).save_pretrained(str(save))
                 print(f"[save] best → {save} (val_recon={val:.6f})")

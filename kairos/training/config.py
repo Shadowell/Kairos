@@ -49,6 +49,8 @@ class TrainConfig:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
     adam_weight_decay: float = 0.05
+    # Predictor: loader batches per update. Tokenizer: chunks within one batch;
+    # BSQ entropy is chunk-dependent, so this is not a larger-batch equivalent.
     accumulation_steps: int = 1
     num_workers: int = 2
     patience: int = 3           # 连续 N 个 epoch val 不降就停
