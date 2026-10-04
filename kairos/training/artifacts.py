@@ -15,6 +15,7 @@ from uuid import uuid4
 from kairos.data.features import exog_cols_for
 from kairos.data.contracts import TIME_COLUMNS, bar_delta
 from kairos.training.config import TrainConfig
+from kairos.training.horizon_weights import return_loss_metadata
 
 
 MANIFEST_NAME = "kairos_manifest.json"
@@ -79,7 +80,8 @@ def _training_config(cfg: TrainConfig) -> dict:
 
 
 def save_checkpoint(model, tokenizer, cfg: TrainConfig, checkpoint: str | Path,
-                    dataset_hashes: dict[str, str] | None = None) -> dict:
+                    dataset_hashes: dict[str, str] | None = None,
+                    return_loss: dict | None = None) -> dict:
     """Save model and exact in-memory tokenizer snapshot with their contract.
 
     The caller owns the run directory. Replacing a best checkpoint within that
@@ -106,6 +108,8 @@ def save_checkpoint(model, tokenizer, cfg: TrainConfig, checkpoint: str | Path,
         raise ValueError("dataset exog_cols does not match training configuration")
     hashes = hash_training_data(cfg) if dataset_hashes is None else dict(dataset_hashes)
     source_sha, source_dirty = _source_version()
+    training_config = _training_config(cfg)
+    loss_metadata = return_loss_metadata(training_config, cfg.return_horizon, return_loss)
     manifest = {
         "contract_version": CONTRACT_VERSION,
         "target": "log_return",
@@ -123,7 +127,8 @@ def save_checkpoint(model, tokenizer, cfg: TrainConfig, checkpoint: str | Path,
         "dataset_hashes": hashes,
         "source_sha": source_sha,
         "source_dirty": source_dirty,
-        "training_config": _training_config(cfg),
+        "training_config": training_config,
+        "return_loss": loss_metadata,
     }
     checkpoint.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(checkpoint))
@@ -188,6 +193,10 @@ def load_manifest(checkpoint: str | Path) -> dict:
         raise ValueError("Invalid manifest training_config")
     if manifest["training_config"].get("time_feature_list") != TIME_COLUMNS:
         raise ValueError("manifest training_config time_feature_list does not match fixed time slots")
+    manifest["return_loss"] = return_loss_metadata(
+        manifest["training_config"], manifest["return_horizon"], manifest.get("return_loss"),
+        allow_historical=True,
+    )
     if manifest["source_sha"] is not None and (
             not isinstance(manifest["source_sha"], str) or
             not re.fullmatch(r"[0-9a-f]{40}", manifest["source_sha"])):

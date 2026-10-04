@@ -104,7 +104,8 @@ class _SavedObject:
 
 
 def _config(tmp_path):
-    cfg = TrainConfig(dataset_path=str(tmp_path / "data"), save_path=str(tmp_path))
+    cfg = TrainConfig(dataset_path=str(tmp_path / "data"), save_path=str(tmp_path),
+                      return_loss_weighting="uniform", return_loss_weights=[1.] * 30)
     cfg.run_id = "offline-test"
     cfg.comet_api_key = "MUST_NOT_BE_SAVED"
     data = Path(cfg.dataset_path)
@@ -171,7 +172,8 @@ class _RecordingTokenizer:
 def test_joint_loss_uses_only_anchor_and_raw_dataset_target():
     from kairos.training.train_predictor import _batch_loss
     cfg = TrainConfig(lookback_window=3, return_horizon=2, n_quantiles=3,
-                      ce_weight=0., quantile_weight=2.)
+                      ce_weight=0., quantile_weight=2., return_loss_weighting="uniform",
+                      return_loss_weights=[1., 1.])
     model = _tiny_model().eval()
     tokenizer = _RecordingTokenizer()
     x = torch.zeros(2, 6, 6)
@@ -198,7 +200,8 @@ class _EpochDataset(TensorDataset):
 def test_training_accumulates_tail_and_selects_joint_validation(tmp_path, monkeypatch, rank):
     from kairos.training import train_predictor as trainer
     cfg = TrainConfig(epochs=5, batch_size=1, accumulation_steps=2, patience=1,
-                      num_workers=0, return_horizon=2, n_quantiles=3)
+                      num_workers=0, return_horizon=2, n_quantiles=3,
+                      return_loss_weighting="uniform")
     dataset = _EpochDataset(torch.zeros(3, 1))
     loader = DataLoader(dataset, batch_size=1)
     monkeypatch.setattr(trainer, "_make_loaders", lambda *args: (loader, loader, dataset, dataset))
@@ -243,7 +246,8 @@ def test_accumulation_matches_larger_batch_with_short_final_batch(tmp_path, monk
         model = torch.nn.Linear(1, 1, bias=False)
         model.weight.data.fill_(0.01)
         cfg = TrainConfig(epochs=1, batch_size=batch_size, accumulation_steps=accumulation,
-                          predictor_learning_rate=0.01, adam_weight_decay=0.)
+                          predictor_learning_rate=0.01, adam_weight_decay=0.,
+                          return_loss_weighting="uniform")
         trainer._train(model, None, torch.device("cpu"), cfg, tmp_path, 0, 1)
         weights.append(model.weight.detach().clone())
     assert torch.allclose(weights[0], weights[1], atol=1e-7)

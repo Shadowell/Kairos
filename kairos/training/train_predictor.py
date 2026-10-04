@@ -30,6 +30,7 @@ from kairos.models import KronosWithExogenous
 from kairos.training.config import TrainConfig, preset_for
 from kairos.training.artifacts import create_run_dir, hash_training_data, save_checkpoint
 from kairos.training.dataset import KronosSequenceDataset
+from kairos.training.horizon_weights import estimate_horizon_weights
 from kairos.utils import (
     cleanup_ddp,
     format_time,
@@ -58,6 +59,25 @@ def _unwrap(model):
     return model.module if isinstance(model, DDP) else model
 
 
+def _resolve_return_loss(dataset, cfg: TrainConfig) -> dict:
+    """Fit once on rank zero and share the exact result before any updates."""
+    if dist.is_initialized():
+        message = [None, None]
+        if dist.get_rank() == 0:
+            try:
+                message[0] = estimate_horizon_weights(dataset, cfg)
+            except Exception as exc:
+                message[1] = f"{type(exc).__name__}: {exc}"
+        dist.broadcast_object_list(message, src=0)
+        if message[1] is not None:
+            raise ValueError(f"unable to resolve training horizon weights: {message[1]}")
+        result = message[0]
+    else:
+        result = estimate_horizon_weights(dataset, cfg)
+    cfg.return_loss_weights = list(result["weights"])
+    return result
+
+
 def _batch_loss(model, tokenizer, batch, device, cfg: TrainConfig):
     """The same teacher-forced CE + anchored log-return loss in both phases."""
     x, stamp, exog, targets = (value.to(device, non_blocking=True) for value in batch)
@@ -76,9 +96,13 @@ def _batch_loss(model, tokenizer, batch, device, cfg: TrainConfig):
     ce, _, _ = raw_model.head.compute_loss(s1_logits, s2_logits, s1_target, s2_target)
     if q_pred is None:
         raise ValueError("version 2 predictor training requires a quantile return head")
+    if cfg.return_loss_weights is None:
+        raise ValueError("return_loss_weights must be resolved before computing the loss")
     quantiles = torch.linspace(0.1, 0.9, cfg.n_quantiles, device=device)
+    horizon_weights = torch.as_tensor(cfg.return_loss_weights, device=device, dtype=q_pred.dtype)
     pin = raw_model.return_head.pinball_loss(
         q_pred[:, history - 1:history], targets[:, None, :], quantiles,
+        horizon_weights=horizon_weights,
     )
     return cfg.ce_weight * ce + cfg.quantile_weight * pin, ce, pin
 
@@ -96,6 +120,11 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
         dist.all_reduce(val_size)
     if train_size == 0 or val_size == 0:
         raise ValueError("empty training or validation loader; check contiguous windows and batch settings")
+    return_loss = _resolve_return_loss(t_ds, cfg)
+    if rank == 0:
+        print(f"[return loss] {return_loss['method']}; "
+              f"training windows={return_loss['effective_samples']}; "
+              f"weights={cfg.return_loss_weights}")
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(
@@ -184,7 +213,7 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
             if improved:
                 save = save_dir / "checkpoints" / "best_model"
                 manifest = save_checkpoint(_unwrap(model), tokenizer, cfg, save,
-                                           dataset_hashes=dataset_hashes)
+                                           dataset_hashes=dataset_hashes, return_loss=return_loss)
                 if manifest is not None:
                     dataset_hashes = manifest["dataset_hashes"]
                 print(f"[save] best → {save} (val_loss={val:.4f})")
@@ -199,7 +228,7 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
                 print(f"[early-stop] val did not improve for {patience} epochs; stopping at ep {ep+1}")
             break
 
-    return {"best_val_loss": best, "stopped_epoch": ep + 1}
+    return {"best_val_loss": best, "stopped_epoch": ep + 1, "return_loss": return_loss}
 
 
 def main():
@@ -235,6 +264,8 @@ def main():
         "KAIROS_LR": ("predictor_learning_rate", float),
         "KAIROS_UNFREEZE_LAST_N": ("unfreeze_last_n", int),
         "KAIROS_LOG_INTERVAL": ("log_interval", int),
+        "KAIROS_RETURN_SCALE_SAMPLES": ("return_scale_samples", int),
+        "KAIROS_RETURN_SCALE_FLOOR": ("return_scale_floor", float),
     }
     for env_key, (attr, caster) in _env_overrides.items():
         val = os.environ.get(env_key)
@@ -250,7 +281,8 @@ def main():
     if pred_override:
         cfg.pretrained_predictor_path = pred_override
     for env, attribute in (("KAIROS_PRETRAINED_TOKENIZER", "pretrained_tokenizer_path"),
-                           ("KAIROS_SAVE_PATH", "save_path"), ("KAIROS_RUN_ID", "run_id")):
+                           ("KAIROS_SAVE_PATH", "save_path"), ("KAIROS_RUN_ID", "run_id"),
+                           ("KAIROS_RETURN_LOSS_WEIGHTING", "return_loss_weighting")):
         if os.environ.get(env):
             setattr(cfg, attribute, os.environ[env])
     if not cfg.use_return_head:

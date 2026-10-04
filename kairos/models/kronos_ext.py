@@ -88,6 +88,7 @@ class QuantileReturnHead(nn.Module):
         target: torch.Tensor,      # [B, T, h]
         quantiles: torch.Tensor,   # [q]
         mask: Optional[torch.Tensor] = None,
+        horizon_weights: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if pred.ndim != 4 or target.shape != pred.shape[:-1]:
             raise ValueError("pred/target must have shapes [B,T,H,Q] and [B,T,H]")
@@ -97,6 +98,16 @@ class QuantileReturnHead(nn.Module):
         q = quantiles.view(1, 1, 1, -1)                       # [1,1,1,q]
         diff = target - pred                                  # [B,T,h,q]
         loss = torch.maximum(q * diff, (q - 1) * diff)
+        if horizon_weights is not None:
+            if horizon_weights.ndim != 1 or len(horizon_weights) != pred.shape[-2]:
+                raise ValueError("horizon_weights must have shape [H]")
+            if not torch.isfinite(horizon_weights).all() or (horizon_weights <= 0).any():
+                raise ValueError("horizon_weights must be finite and positive")
+            weights = horizon_weights.to(device=pred.device, dtype=torch.float64)
+            # Divide by the maximum first to avoid overflow when averaging.
+            weights = weights / weights.max()
+            weights = weights / weights.mean()
+            loss = loss * weights.to(dtype=loss.dtype).view(1, 1, -1, 1)
         if mask is not None:
             if mask.shape != pred.shape[:2]:
                 raise ValueError("mask must have shape [B,T]")

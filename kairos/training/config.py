@@ -73,6 +73,10 @@ class TrainConfig:
     use_exog: bool = True
     use_return_head: bool = True
     return_horizon: int = 30
+    return_loss_weighting: str = "inverse_volatility"
+    return_loss_weights: List[float] | None = None  # resolved once from training windows
+    return_scale_samples: int = 4096
+    return_scale_floor: float = 1e-6
     n_quantiles: int = 9
     ce_weight: float = 0.5
     quantile_weight: float = 2.0
