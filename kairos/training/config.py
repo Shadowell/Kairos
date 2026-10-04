@@ -55,6 +55,7 @@ class TrainConfig:
 
     # ---------------- Logging / Checkpoints ----------------
     save_path: str = "./artifacts/checkpoints"
+    run_id: str | None = None  # generated UTC timestamp + UUID when omitted
     tokenizer_save_folder_name: str = "tokenizer"
     predictor_save_folder_name: str = "predictor"
     use_comet: bool = False
@@ -79,8 +80,7 @@ class TrainConfig:
 # ---------------------------------------------------------------------------
 # Market-aware presets
 # ---------------------------------------------------------------------------
-# Crypto minute presets keep the prediction horizon aligned with the current
-# h30 supervision target and IC backtest.
+# Crypto minute presets supervise every log-return horizon from 1 through H.
 _PRESETS: dict[str, dict] = {
     "crypto-1min": {
         "market": "crypto",

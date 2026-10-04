@@ -13,8 +13,10 @@ Launch::
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from time import gmtime, strftime
 
@@ -26,7 +28,8 @@ from torch.utils.data.distributed import DistributedSampler
 
 from kairos.models import KronosWithExogenous
 from kairos.training.config import TrainConfig, preset_for
-from kairos.training.dataset import AShareKronosDataset
+from kairos.training.artifacts import create_run_dir, hash_training_data, save_checkpoint
+from kairos.training.dataset import KronosSequenceDataset
 from kairos.utils import (
     cleanup_ddp,
     format_time,
@@ -38,21 +41,61 @@ from kairos.vendor.kronos import KronosTokenizer
 
 
 def _make_loaders(cfg: TrainConfig, rank: int, world: int):
-    train = AShareKronosDataset("train", cfg)
-    val = AShareKronosDataset("val", cfg)
-    t_sampler = DistributedSampler(train, num_replicas=world, rank=rank, shuffle=True)
-    v_sampler = DistributedSampler(val, num_replicas=world, rank=rank, shuffle=False)
+    train = KronosSequenceDataset("train", cfg, include_targets=True)
+    val = KronosSequenceDataset("val", cfg, include_targets=True)
+    t_sampler = DistributedSampler(train, num_replicas=world, rank=rank, shuffle=True,
+                                   seed=cfg.seed)
+    # Validation covers each sample exactly once, without padding duplicates.
+    v_sampler = range(rank, len(val), world)
     t_loader = DataLoader(train, batch_size=cfg.batch_size, sampler=t_sampler,
-                          num_workers=cfg.num_workers, pin_memory=True, drop_last=True)
+                          num_workers=cfg.num_workers, pin_memory=torch.cuda.is_available(), drop_last=False)
     v_loader = DataLoader(val, batch_size=cfg.batch_size, sampler=v_sampler,
-                          num_workers=cfg.num_workers, pin_memory=True, drop_last=False)
+                          num_workers=cfg.num_workers, pin_memory=torch.cuda.is_available(), drop_last=False)
     return t_loader, v_loader, train, val
 
 
+def _unwrap(model):
+    return model.module if isinstance(model, DDP) else model
+
+
+def _batch_loss(model, tokenizer, batch, device, cfg: TrainConfig):
+    """The same teacher-forced CE + anchored log-return loss in both phases."""
+    x, stamp, exog, targets = (value.to(device, non_blocking=True) for value in batch)
+    history = cfg.lookback_window
+    if x.shape[1] <= history or targets.shape != (x.shape[0], cfg.return_horizon):
+        raise ValueError("batch does not contain history, next-token label and return targets")
+    with torch.no_grad():
+        s1, s2 = tokenizer.encode(x[:, :history + 1], half=True)
+    s1_target, s2_target = s1[:, 1:], s2[:, 1:]
+    s1_logits, s2_logits, q_pred = model(
+        s1[:, :-1], s2[:, :-1], stamp=stamp[:, :history],
+        exog=exog[:, :history] if cfg.use_exog else None,
+        use_teacher_forcing=True, s1_targets=s1_target,
+    )
+    raw_model = _unwrap(model)
+    ce, _, _ = raw_model.head.compute_loss(s1_logits, s2_logits, s1_target, s2_target)
+    if q_pred is None:
+        raise ValueError("version 2 predictor training requires a quantile return head")
+    quantiles = torch.linspace(0.1, 0.9, cfg.n_quantiles, device=device)
+    pin = raw_model.return_head.pinball_loss(
+        q_pred[:, history - 1:history], targets[:, None, :], quantiles,
+    )
+    return cfg.ce_weight * ce + cfg.quantile_weight * pin, ce, pin
+
+
 def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
-           rank: int, world: int):
+           rank: int, world: int, dataset_hashes: dict[str, str] | None = None):
     t0 = time.time()
+    if cfg.epochs < 1 or cfg.accumulation_steps < 1:
+        raise ValueError("epochs and accumulation_steps must be positive")
     t_loader, v_loader, t_ds, v_ds = _make_loaders(cfg, rank, world)
+    train_size = torch.tensor(len(t_loader), device=device)
+    val_size = torch.tensor(len(v_loader), device=device)
+    if dist.is_initialized():
+        dist.all_reduce(train_size, op=dist.ReduceOp.MIN)
+        dist.all_reduce(val_size)
+    if train_size == 0 or val_size == 0:
+        raise ValueError("empty training or validation loader; check contiguous windows and batch settings")
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(
@@ -60,117 +103,96 @@ def _train(model, tokenizer, device, cfg: TrainConfig, save_dir: Path,
         betas=(cfg.adam_beta1, cfg.adam_beta2),
         weight_decay=cfg.adam_weight_decay,
     )
-    sch = torch.optim.lr_scheduler.OneCycleLR(
-        opt, max_lr=cfg.predictor_learning_rate,
-        steps_per_epoch=len(t_loader), epochs=cfg.epochs,
-        pct_start=getattr(cfg, "warmup_pct", 0.03), div_factor=10,
-    )
-
-    quantiles = None
-    if cfg.use_return_head:
-        quantiles = torch.linspace(0.1, 0.9, cfg.n_quantiles, device=device)
+    steps_per_epoch = math.ceil(len(t_loader) / cfg.accumulation_steps)
+    total_steps = cfg.epochs * steps_per_epoch
+    # Tiny CPU runs may not contain enough updates for two nonempty phases.
+    if cfg.warmup_pct * total_steps > 1 and (1 - cfg.warmup_pct) * total_steps > 1:
+        sch = torch.optim.lr_scheduler.OneCycleLR(
+            opt, max_lr=cfg.predictor_learning_rate, total_steps=total_steps,
+            pct_start=cfg.warmup_pct, div_factor=10,
+        )
+    else:
+        sch = torch.optim.lr_scheduler.LambdaLR(opt, lambda _: 1.)
 
     best = float("inf")
     step_g = 0
-    close_idx = 3  # feature_list order: open, high, low, close, vol, amt
     patience = getattr(cfg, "patience", 0)
     bad_epochs = 0
 
     for ep in range(cfg.epochs):
         ep_t0 = time.time()
         model.train()
-        t_loader.sampler.set_epoch(ep)
-        t_ds.set_epoch_seed(ep * 10000 + rank)
+        if hasattr(t_loader.sampler, "set_epoch"):
+            t_loader.sampler.set_epoch(ep)
+        t_ds.set_epoch_seed(ep)
         v_ds.set_epoch_seed(0)
-
-        for i, (x, stamp, exog) in enumerate(t_loader):
-            x = x.to(device, non_blocking=True)
-            stamp = stamp.to(device, non_blocking=True)
-            exog = exog.to(device, non_blocking=True) if cfg.use_exog else None
-
-            with torch.no_grad():
-                s1_ids, s2_ids = tokenizer.encode(x, half=True)
-
-            s1_in, s2_in = s1_ids[:, :-1], s2_ids[:, :-1]
-            s1_tg, s2_tg = s1_ids[:, 1:], s2_ids[:, 1:]
-            stamp_in = stamp[:, :-1, :]
-            exog_in = exog[:, :-1, :] if exog is not None else None
-
-            s1_logits, s2_logits, q_pred = model(
-                s1_in, s2_in, stamp=stamp_in, exog=exog_in,
-                use_teacher_forcing=True, s1_targets=s1_tg,
-            )
-            ce, _, _ = model.module.head.compute_loss(s1_logits, s2_logits, s1_tg, s2_tg)
-            loss = cfg.ce_weight * ce
-
-            if cfg.use_return_head and q_pred is not None:
-                close_n = x[:, :, close_idx]  # normalized close
-                T = close_n.size(1)
-                h = cfg.return_horizon
-                targets = []
-                for k in range(h):
-                    rolled = torch.roll(close_n, shifts=-(k + 1), dims=1)
-                    targets.append(rolled - close_n)
-                target = torch.stack(targets, dim=-1)          # [B, T, h]
-                valid = T - h
-                target = target[:, :valid]
-                q_valid = q_pred[:, :valid]
-                mask = torch.ones_like(target[..., 0])
-                pin = model.module.return_head.pinball_loss(q_valid, target, quantiles, mask)
-                loss = loss + cfg.quantile_weight * pin
-
-            opt.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=3.0)
-            opt.step(); sch.step()
+        opt.zero_grad(set_to_none=True)
+        group_samples = 0
+        for i, batch in enumerate(t_loader):
+            update = (i + 1) % cfg.accumulation_steps == 0 or i + 1 == len(t_loader)
+            sync = model.no_sync() if isinstance(model, DDP) and not update else nullcontext()
+            with sync:
+                loss, ce, pin = _batch_loss(model, tokenizer, batch, device, cfg)
+                if not torch.isfinite(loss):
+                    raise ValueError("non-finite training loss")
+                samples = batch[0].shape[0]
+                (loss * samples).backward()
+            group_samples += samples
+            if update:
+                for parameter in params:
+                    if parameter.grad is not None:
+                        parameter.grad.div_(group_samples)
+                torch.nn.utils.clip_grad_norm_(params, max_norm=3.0)
+                opt.step()
+                sch.step()
+                opt.zero_grad(set_to_none=True)
+                group_samples = 0
 
             if rank == 0 and (step_g + 1) % cfg.log_interval == 0:
                 print(f"[ep {ep+1}/{cfg.epochs} step {i+1}/{len(t_loader)}] "
                       f"lr={opt.param_groups[0]['lr']:.2e} "
-                      f"loss={loss.item():.4f} ce={ce.item():.4f}")
+                      f"loss={loss.item():.4f} ce={ce.item():.4f} pinball={pin.item():.4f}")
             step_g += 1
 
         # --- validation ---
         model.eval()
         loss_sum, count = 0.0, 0
         with torch.no_grad():
-            for x, stamp, exog in v_loader:
-                x = x.to(device); stamp = stamp.to(device)
-                exog = exog.to(device) if cfg.use_exog else None
-                s1_ids, s2_ids = tokenizer.encode(x, half=True)
-                s1_l, s2_l, _ = model(
-                    s1_ids[:, :-1], s2_ids[:, :-1],
-                    stamp=stamp[:, :-1],
-                    exog=exog[:, :-1] if exog is not None else None,
-                )
-                ce, _, _ = model.module.head.compute_loss(
-                    s1_l, s2_l, s1_ids[:, 1:], s2_ids[:, 1:])
-                loss_sum += ce.item(); count += 1
-        ls = torch.tensor(loss_sum, device=device); cn = torch.tensor(count, device=device)
-        dist.all_reduce(ls); dist.all_reduce(cn)
-        val = (ls / cn).item() if cn.item() else 0.0
+            for batch in v_loader:
+                # Ranks may have different validation batch counts, so avoid
+                # DDP forward collectives and reduce only final sample totals.
+                loss, _, _ = _batch_loss(_unwrap(model), tokenizer, batch, device, cfg)
+                samples = batch[0].shape[0]
+                loss_sum += loss.item() * samples
+                count += samples
+        totals = torch.tensor([loss_sum, count], dtype=torch.float64, device=device)
+        if dist.is_initialized():
+            dist.all_reduce(totals)
+        val = (totals[0] / totals[1]).item()
+        if not math.isfinite(val):
+            raise ValueError("non-finite validation loss")
 
         improved = val < best - 1e-4
-        if rank == 0:
-            print(f"--- ep {ep+1}: val_ce={val:.4f} "
-                  f"({format_time(time.time() - ep_t0)} / total {format_time(time.time() - t0)}) ---")
-            if improved:
-                best = val
-                save = save_dir / "checkpoints" / "best_model"
-                model.module.save_pretrained(str(save))
-                print(f"[save] best → {save} (val_ce={val:.4f})")
-        # 广播 improved 标记给所有 rank，统一做早停决策
-        flag = torch.tensor([1 if improved else 0], device=device)
-        dist.all_reduce(flag)
-        improved_any = flag.item() > 0
-        if improved_any:
+        if improved:
+            best = val
             bad_epochs = 0
         else:
             bad_epochs += 1
-            if rank == 0:
+        if rank == 0:
+            print(f"--- ep {ep+1}: val_loss={val:.4f} "
+                  f"({format_time(time.time() - ep_t0)} / total {format_time(time.time() - t0)}) ---")
+            if improved:
+                save = save_dir / "checkpoints" / "best_model"
+                manifest = save_checkpoint(_unwrap(model), tokenizer, cfg, save,
+                                           dataset_hashes=dataset_hashes)
+                if manifest is not None:
+                    dataset_hashes = manifest["dataset_hashes"]
+                print(f"[save] best → {save} (val_loss={val:.4f})")
+            else:
                 print(f"[patience] {bad_epochs}/{patience} epochs without improvement")
 
-        dist.barrier()
+        if dist.is_initialized():
+            dist.barrier()
 
         if patience > 0 and bad_epochs >= patience:
             if rank == 0:
@@ -227,21 +249,35 @@ def main():
     pred_override = os.environ.get("KAIROS_PRETRAINED_PREDICTOR")
     if pred_override:
         cfg.pretrained_predictor_path = pred_override
-    if "WORLD_SIZE" not in os.environ:
-        raise RuntimeError("请用 torchrun 启动此脚本")
-    rank, world, local = setup_ddp()
+    for env, attribute in (("KAIROS_PRETRAINED_TOKENIZER", "pretrained_tokenizer_path"),
+                           ("KAIROS_SAVE_PATH", "save_path"), ("KAIROS_RUN_ID", "run_id")):
+        if os.environ.get(env):
+            setattr(cfg, attribute, os.environ[env])
+    if not cfg.use_return_head:
+        raise ValueError("version 2 predictor training requires use_return_head=True")
+    if not 0 < cfg.warmup_pct < 1:
+        raise ValueError("warmup_pct must be between 0 and 1")
+    rank, world, local = setup_ddp() if int(os.environ.get("WORLD_SIZE", "1")) > 1 else (0, 1, 0)
     use_cuda = torch.cuda.is_available()
     device = torch.device(f"cuda:{local}") if use_cuda else torch.device("cpu")
     set_seed(cfg.seed, rank)
 
-    save_dir = Path(cfg.save_path) / cfg.predictor_save_folder_name
+    reservation = [None, None]
     if rank == 0:
-        (save_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
-    dist.barrier()
+        try:
+            reservation[0] = str(create_run_dir(cfg))
+        except (OSError, ValueError) as exc:
+            reservation[1] = f"{type(exc).__name__}: {exc}"
+    if dist.is_initialized():
+        dist.broadcast_object_list(reservation, src=0)
+    if reservation[1] is not None:
+        cleanup_ddp()
+        raise RuntimeError(f"Unable to reserve a new run directory: {reservation[1]}")
+    save_dir = Path(reservation[0])
+    cfg.run_id = save_dir.name
 
-    # tokenizer: prefer fine-tuned if available, else the public checkpoint
-    tok_path = Path(cfg.save_path) / cfg.tokenizer_save_folder_name / "checkpoints" / "best_model"
-    tok_src = str(tok_path) if tok_path.exists() else cfg.pretrained_tokenizer_path
+    # The tokenizer is explicit; unrelated experiments must not change this run.
+    tok_src = cfg.pretrained_tokenizer_path
     if rank == 0:
         print(f"[tokenizer] loading {tok_src}")
     tokenizer = KronosTokenizer.from_pretrained(tok_src).eval().to(device)
@@ -254,20 +290,24 @@ def main():
         n_quantiles=cfg.n_quantiles,
     ).to(device)
     model.freeze_backbone(unfreeze_last_n=cfg.unfreeze_last_n)
-    ddp_kwargs = dict(find_unused_parameters=True)
-    if use_cuda:
-        ddp_kwargs["device_ids"] = [local]
-    model = DDP(model, **ddp_kwargs)
+    if dist.is_initialized():
+        ddp_kwargs = dict(find_unused_parameters=True)
+        if use_cuda:
+            ddp_kwargs["device_ids"] = [local]
+        model = DDP(model, **ddp_kwargs)
 
     if rank == 0:
-        print("Predictor size:", get_model_size(model.module))
+        print("Predictor size:", get_model_size(_unwrap(model)))
 
     summary = {"start_time": strftime("%Y-%m-%dT%H-%M-%S", gmtime()), "world_size": world}
-    summary["final_result"] = _train(model, tokenizer, device, cfg, save_dir, rank, world)
-    if rank == 0:
-        (save_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
-    cleanup_ddp()
+    try:
+        hashes = hash_training_data(cfg) if rank == 0 else None
+        summary["final_result"] = _train(model, tokenizer, device, cfg, save_dir, rank, world,
+                                          dataset_hashes=hashes)
+        if rank == 0:
+            (save_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    finally:
+        cleanup_ddp()
 
 
 if __name__ == "__main__":

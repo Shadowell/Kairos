@@ -28,6 +28,7 @@ from kairos.vendor.kronos.module import (
     DependencyAwareLayer,
     DualHead,
     HierarchicalEmbedding,
+    MultiHeadCrossAttentionWithRoPE,
     RMSNorm,
     TemporalEmbedding,
     TransformerBlock,
@@ -88,14 +89,55 @@ class QuantileReturnHead(nn.Module):
         quantiles: torch.Tensor,   # [q]
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if pred.ndim != 4 or target.shape != pred.shape[:-1]:
+            raise ValueError("pred/target must have shapes [B,T,H,Q] and [B,T,H]")
+        if quantiles.ndim != 1 or len(quantiles) != pred.shape[-1]:
+            raise ValueError("quantiles must match the prediction's final dimension")
         target = target.unsqueeze(-1)                         # [B,T,h,1]
         q = quantiles.view(1, 1, 1, -1)                       # [1,1,1,q]
         diff = target - pred                                  # [B,T,h,q]
         loss = torch.maximum(q * diff, (q - 1) * diff)
         if mask is not None:
-            loss = loss * mask.unsqueeze(-1).unsqueeze(-1)
-            return loss.sum() / (mask.sum() + 1e-9)
+            if mask.shape != pred.shape[:2]:
+                raise ValueError("mask must have shape [B,T]")
+            if not torch.isfinite(mask).all() or (mask < 0).any():
+                raise ValueError("mask must contain finite, nonnegative weights")
+            weight = mask.sum()
+            if weight <= 0:
+                raise ValueError("mask must select at least one valid element")
+            loss = torch.where(mask[..., None, None] > 0,
+                               loss * mask[..., None, None], 0.)
+            return loss.sum() / (weight * pred.shape[-2] * pred.shape[-1])
         return loss.mean()
+
+
+class _CausalDependencyAttention(MultiHeadCrossAttentionWithRoPE):
+    """Keep sibling-token conditioning causal during validation as in training.
+
+    The upstream implementation switches to full attention in eval mode for
+    autoregressive generation. Teacher-forced evaluation needs the same causal
+    boundary as training; parameter names and shapes remain unchanged.
+    """
+
+    def forward(self, query, key, value, key_padding_mask=None):
+        batch, query_len, _ = query.shape
+        key_len = key.shape[1]
+        q = self.q_proj(query).view(batch, query_len, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(key).view(batch, key_len, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(value).view(batch, key_len, self.n_heads, self.head_dim).transpose(1, 2)
+        q, k = self.rotary(q, k)
+        mask = None
+        if key_padding_mask is not None:
+            mask = key_padding_mask[:, None, None, :].expand(-1, self.n_heads, query_len, -1)
+        result = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask,
+            dropout_p=self.attn_dropout_p if self.training else 0.0,
+            # decode_s2 also accepts one newly sampled token against the whole
+            # observed prefix; that final query can see every history key.
+            is_causal=query_len == key_len,
+        )
+        result = result.transpose(1, 2).contiguous().view(batch, query_len, self.d_model)
+        return self.resid_dropout(self.out_proj(result))
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +201,7 @@ class KronosWithExogenous(nn.Module, PyTorchModelHubMixin):
         ])
         self.norm = RMSNorm(d_model)
         self.dep_layer = DependencyAwareLayer(d_model)
+        self.dep_layer.cross_attn = _CausalDependencyAttention(d_model, 4)
         self.head = DualHead(s1_bits, s2_bits, d_model)
 
         # ---- 新增的外生通道 ----

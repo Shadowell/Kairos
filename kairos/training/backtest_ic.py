@@ -1,26 +1,17 @@
-"""IC backtest for the fine-tuned Kronos-with-exogenous predictor.
+"""Evaluate raw log-return forecasts at the final visible history bar.
 
-流程
-----
-1. 加载 fine-tuned ``best_model`` (KronosWithExogenous) + Kronos-Tokenizer.
-2. 遍历 ``test_data.pkl`` / ``exog_test.pkl`` 中每只股票的每一个滑动窗口.
-3. 模型 forward 一次，取 ``quantiles[:, -1, :, mid_q]`` 作为"最后一个 token 对未来 5 步
-   差分收益的中位预测"作为 score.
-4. 真值用窗口结尾对应的 *原始 close* 的未来 H 步 log-return.
-5. 按日期聚合，计算 cross-sectional IC (Pearson) / rank-IC (Spearman).
-
-用法::
-
-    python -m kairos.training.backtest_ic \
-        --ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
-        --out  artifacts/backtest_report.json
+Cross-sectional IC is computed across distinct symbols at an exact UTC time,
+then averaged within date/hour buckets. Pooled and per-symbol correlations are
+separate diagnostics and never substituted for cross-sectional evidence.
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import pickle
+import random
 from pathlib import Path
 from typing import Dict, List
 
@@ -29,37 +20,29 @@ import pandas as pd
 import torch
 from scipy.stats import pearsonr, spearmanr
 
-from kairos.models import KronosWithExogenous
+from kairos.data.contracts import (
+    MAIN_COLUMNS, bar_delta, contiguous_starts, log_return_targets,
+    validate_exog_frame, validate_main_frame,
+)
 from kairos.training.config import TrainConfig, preset_for
-from kairos.vendor.kronos import KronosTokenizer
-
-
-def _load_dataset_meta(dataset_path: str | Path) -> dict:
-    """Load ``meta.json`` produced by ``kairos-prepare``.
-
-    Returns an empty dict if no manifest is present, which keeps the backtest
-    backward-compatible with older prepared bundles.
-    """
-    path = Path(dataset_path) / "meta.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
+from kairos.vendor.kronos import Kronos, KronosPredictor, KronosTokenizer
 
 
 _BUCKET_ALIASES = {
-    "date": "date",
-    "day": "date",
-    "daily": "date",
-    "hour": "hour",
-    "hourly": "hour",
-    "minute": "minute",
-    "minutely": "minute",
-    "none": "none",
-    "pool": "none",
+    "auto": "date", "date": "date", "day": "date", "daily": "date",
+    "hour": "hour", "hourly": "hour", "minute": "minute",
+    "minutely": "minute", "none": "none", "pool": "none",
 }
+
+
+def _load_dataset_meta(dataset_path: str | Path) -> dict:
+    path = Path(dataset_path) / "meta.json"
+    if not path.exists():
+        return {}
+    meta = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(meta, dict):
+        raise ValueError("dataset meta.json must contain an object")
+    return meta
 
 
 def _bucket_label(date: pd.Timestamp, bucket: str) -> pd.Timestamp | str:
@@ -69,330 +52,352 @@ def _bucket_label(date: pd.Timestamp, bucket: str) -> pd.Timestamp | str:
         return date.floor("h")
     if bucket == "minute":
         return date.floor("min")
-    return "pool"
+    return "all_timestamps"
 
 
-def _build_window_features(
-    df: pd.DataFrame, feature_list: List[str], time_feature_list: List[str]
-) -> pd.DataFrame:
-    df = df.reset_index()
-    if "datetime" not in df.columns:
-        df = df.rename(columns={df.columns[0]: "datetime"})
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df["minute"] = df["datetime"].dt.minute
-    df["hour"] = df["datetime"].dt.hour
-    df["weekday"] = df["datetime"].dt.weekday
-    df["day"] = df["datetime"].dt.day
-    df["month"] = df["datetime"].dt.month
-    return df
+def _number(value) -> float | None:
+    return float(value) if value is not None and np.isfinite(value) else None
+
+
+def _correlations(frame: pd.DataFrame, score: str, target: str) -> dict:
+    pairs = frame[[score, target]].replace([np.inf, -np.inf], np.nan).dropna()
+    result = dict(pearson=None, pearson_p=None, spearman=None, spearman_p=None,
+                  n=len(pairs), hit_rate=None)
+    if len(pairs):
+        result["hit_rate"] = float(((pairs[score] > 0) == (pairs[target] > 0)).mean())
+    if len(pairs) >= 2 and pairs[score].nunique() > 1 and pairs[target].nunique() > 1:
+        p, s = pearsonr(pairs[score], pairs[target]), spearmanr(pairs[score], pairs[target])
+        result.update(pearson=_number(p.statistic), pearson_p=_number(p.pvalue),
+                      spearman=_number(s.statistic), spearman_p=_number(s.pvalue))
+    return result
+
+
+def summarize_records(records: list[dict], horizons: List[int], aggregation: str = "date") -> dict:
+    """Separate exact-time cross sections, symbol time series and pooled pairs."""
+    bucket = _BUCKET_ALIASES.get(aggregation.lower())
+    if bucket is None:
+        raise ValueError("aggregation must be auto, date, hour, minute or none")
+    columns = ["symbol", "date"] + [f"{kind}_h{h}" for h in horizons for kind in ("score", "ret")]
+    frame = pd.DataFrame.from_records(records, columns=columns)
+    frame["date"] = pd.to_datetime(frame["date"], utc=True)
+    if frame.duplicated(["symbol", "date"]).any():
+        raise ValueError("duplicate symbol/timestamp predictions cannot form an IC cross section")
+    report = {
+        "n_records": len(frame), "n_symbols": int(frame["symbol"].nunique()),
+        "date_range": [str(frame.date.min()), str(frame.date.max())] if len(frame) else [None, None],
+        "pooled": {}, "time_series": {}, "cross_sectional": {}, "by_date_mean": {},
+        "methodology": {
+            "version": 2, "target": "log_return", "anchor": "last_visible_history_bar",
+            "cross_section": "exact_utc_timestamp", "minimum_distinct_symbols": 3,
+            "aggregation": bucket, "bucket_weighting": "equal_valid_timestamps",
+            "summary_weighting": "equal_valid_buckets", "icir_ddof": 1,
+            "p_values": "naive_iid_diagnostics_only; overlapping returns are dependent",
+            "legacy_aliases": {"overall": "pooled", "by_date_mean": "cross_sectional.summary"},
+        },
+    }
+    for h in horizons:
+        key, score, target = f"h{h}", f"score_h{h}", f"ret_h{h}"
+        report["pooled"][key] = _correlations(frame, score, target)
+        for symbol, group in frame.groupby("symbol", sort=True):
+            report["time_series"].setdefault(str(symbol), {})[key] = _correlations(group, score, target)
+        points = []
+        for date, group in frame.groupby("date", sort=True):
+            finite = group.replace([np.inf, -np.inf], np.nan).dropna(subset=[score, target])
+            if finite.symbol.nunique() < 3:
+                continue
+            corr = _correlations(finite, score, target)
+            if corr["pearson"] is not None and corr["spearman"] is not None:
+                points.append({"timestamp": str(date), "bucket": str(_bucket_label(date, bucket)),
+                               "ic": corr["pearson"], "rank_ic": corr["spearman"],
+                               "n_symbols": int(finite.symbol.nunique())})
+        buckets = []
+        if points:
+            for label, group in pd.DataFrame(points).groupby("bucket", sort=True):
+                buckets.append({"bucket": label, "ic": float(group.ic.mean()),
+                                "rank_ic": float(group.rank_ic.mean()), "n_timestamps": len(group),
+                                "n_symbols_mean": float(group.n_symbols.mean())})
+        ics = np.array([item["ic"] for item in buckets])
+        ranks = np.array([item["rank_ic"] for item in buckets])
+        sd = float(ics.std(ddof=1)) if len(ics) > 1 else None
+        mean = float(ics.mean()) if len(ics) else None
+        summary = {"ic": mean, "rank_ic": float(ranks.mean()) if len(ranks) else None,
+                   "icir": mean / sd if sd is not None and sd > 1e-12 else None,
+                   "ic_std": sd, "n_dates": len(buckets), "n_buckets": len(buckets),
+                   "n_timestamps": len(points), "bucket": bucket,
+                   "n_symbols_mean": float(np.mean([x["n_symbols"] for x in points])) if points else None}
+        report["cross_sectional"][key] = {"summary": summary, "timestamps": points, "buckets": buckets}
+        report["by_date_mean"][key] = summary.copy()
+    report["overall"] = report["pooled"]
+    return report
+
+
+def _load_trained_predictor(path: str, device: str, tokenizer_path: str | None):
+    from kairos.inference import KairosPredictor
+    return KairosPredictor.from_checkpoint(path, device=device, tokenizer_path=tokenizer_path)
+
+
+def _load_baseline_predictor(cfg: TrainConfig, device: str, tokenizer_path: str | None):
+    # Never inherit a local fine-tuned tokenizer by accident for the original baseline.
+    tokenizer = KronosTokenizer.from_pretrained(tokenizer_path or cfg.pretrained_tokenizer_path)
+    model = Kronos.from_pretrained(cfg.pretrained_predictor_path)
+    return KronosPredictor(model.eval(), tokenizer.eval(), device=device,
+                           max_context=cfg.max_context, clip=cfg.clip)
+
+
+@contextmanager
+def _seeded(seed: int):
+    numpy_state, python_state = np.random.get_state(), random.getstate()
+    deterministic = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    try:
+        with torch.random.fork_rng(devices=devices):
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            torch.use_deterministic_algorithms(True)
+            yield
+    finally:
+        np.random.set_state(numpy_state)
+        random.setstate(python_state)
+        torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
+
+
+def _validate_dataset_meta(meta: dict, manifest: dict, *, require_provenance: bool = False) -> None:
+    if "schema_version" in meta and (type(meta["schema_version"]) is not int or meta["schema_version"] != 2):
+        raise ValueError("unsupported dataset schema_version; expected 2 or an unversioned legacy manifest")
+    if require_provenance:
+        required = ["market", "freq", "exog_cols"]
+        if manifest.get("market_type") is not None:
+            required.append("market_type")
+        missing = [key for key in required if key not in meta or meta[key] is None]
+        if missing:
+            raise ValueError(f"dataset meta.json missing {missing}; repack the dataset with kairos-prepare")
+    for key in ("market", "market_type", "feature_cols", "exog_cols"):
+        if key in meta and key in manifest and meta[key] != manifest[key]:
+            raise ValueError(f"dataset {key} differs from model contract")
+    if "freq" in meta and bar_delta(meta["freq"]) != bar_delta(manifest["freq"]):
+        raise ValueError("dataset freq differs from model contract")
+
+
+def _baseline_scores(predictor, main: list[pd.DataFrame], horizon: int, freq: str) -> np.ndarray:
+    delta = bar_delta(freq)
+    future = [pd.Series(pd.date_range(df.index[-1] + delta, periods=horizon, freq=delta)) for df in main]
+    predictions = predictor.predict_batch(
+        [df.rename(columns={"vol": "volume", "amt": "amount"}) for df in main],
+        [pd.Series(df.index) for df in main], future,
+        pred_len=horizon, sample_count=1, verbose=False,
+    )
+    if len(predictions) != len(main):
+        raise ValueError("baseline prediction batch length mismatch")
+    scores = []
+    for df, prediction in zip(main, predictions):
+        close = prediction["close"].to_numpy(dtype=np.float64)
+        if close.shape != (horizon,) or not np.isfinite(close).all() or (close <= 0).any():
+            raise ValueError("baseline must generate finite positive close prices at every horizon")
+        scores.append(np.log(close) - np.log(float(df.close.iloc[-1])))
+    return np.stack(scores)
+
+
+def _seed_summary(runs: list[dict], horizons: List[int]) -> dict:
+    summary = {"pooled": {}, "cross_sectional": {}}
+    for h in horizons:
+        key = f"h{h}"
+        for section, metrics in (("pooled", ("pearson", "spearman", "hit_rate")),
+                                 ("cross_sectional", ("ic", "rank_ic", "icir"))):
+            summary[section][key] = {}
+            for metric in metrics:
+                values = [run[section][key]["summary"][metric] if section == "cross_sectional"
+                          else run[section][key][metric] for run in runs]
+                values = [value for value in values if value is not None]
+                summary[section][key][metric] = {
+                    "mean": float(np.mean(values)) if values else None,
+                    "std": float(np.std(values, ddof=1)) if len(values) > 1 else None,
+                    "n_seeds": len(values),
+                }
+    return summary
 
 
 @torch.no_grad()
 def run_backtest(
-    ckpt_path: str | None,
-    cfg: TrainConfig,
-    horizons: List[int] = (1, 5),
-    batch_size: int = 64,
-    max_symbols: int | None = None,
-    device: str | None = None,
-    use_baseline: bool = False,
-    aggregation: str = "auto",
-    stride: int = 1,
-    per_symbol_limit: int | None = None,
-    tokenizer_path: str | None = None,
+    ckpt_path: str | None, cfg: TrainConfig, horizons: List[int] = (1, 5),
+    batch_size: int = 64, max_symbols: int | None = None, device: str | None = None,
+    use_baseline: bool = False, aggregation: str = "auto", stride: int = 1,
+    per_symbol_limit: int | None = None, tokenizer_path: str | None = None,
+    seed: int = 100, seeds: List[int] | None = None,
 ) -> Dict:
-    device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    print(f"[device] {device_t}")
-
-    # Pick an aggregation bucket. "auto" chooses a bucket that keeps the
-    # cross-section non-trivial; users can override this from the CLI.
-    bucket_key = _BUCKET_ALIASES.get(aggregation.lower(), aggregation.lower())
-    if bucket_key == "auto":
-        if cfg.freq and cfg.freq.lower() in {"1min", "3min", "5min", "15min"}:
-            bucket_key = "date"  # intraday bars → daily cross-section
-        else:
-            bucket_key = "date"
-    if bucket_key not in {"date", "hour", "minute", "none"}:
-        raise ValueError(
-            f"Unknown aggregation bucket {aggregation!r}; "
-            "use one of: auto, date, hour, minute, none"
-        )
-    print(f"[bucket] {bucket_key} (market={cfg.market}, freq={cfg.freq})")
-
-    tok_src = tokenizer_path
-    if tok_src is None:
-        tok_local = Path(cfg.save_path) / cfg.tokenizer_save_folder_name / "checkpoints" / "best_model"
-        tok_src = str(tok_local) if tok_local.exists() else cfg.pretrained_tokenizer_path
-    print(f"[load] tokenizer: {tok_src}")
-    tok = KronosTokenizer.from_pretrained(tok_src).eval().to(device_t)
-
-    if use_baseline or ckpt_path is None:
-        print(f"[load] baseline Kronos-small + random exog/return heads")
-        model = KronosWithExogenous.from_kronos_pretrained(
-            cfg.pretrained_predictor_path,
-            n_exog=cfg.n_exog,
-            use_return_head=cfg.use_return_head,
-            return_horizon=cfg.return_horizon,
-            n_quantiles=cfg.n_quantiles,
-        ).eval().to(device_t)
-    else:
-        print(f"[load] model ckpt: {ckpt_path}")
-        model = KronosWithExogenous.from_pretrained(ckpt_path).eval().to(device_t)
-
-    lookback = cfg.lookback_window
-    n_quantiles = cfg.n_quantiles
-    mid_q = n_quantiles // 2
-
+    """Evaluate a versioned bundle or actual original-Kronos sampled forecasts."""
+    if batch_size <= 0 or stride <= 0 or (max_symbols is not None and max_symbols <= 0):
+        raise ValueError("batch_size, stride and max_symbols must be positive")
+    if per_symbol_limit is not None and per_symbol_limit < 0:
+        raise ValueError("per_symbol_limit cannot be negative")
+    if aggregation.lower() not in _BUCKET_ALIASES:
+        raise ValueError("aggregation must be auto, date, hour, minute or none")
+    horizons = list(horizons)
+    if not horizons or any(isinstance(h, bool) or not isinstance(h, (int, np.integer)) or h < 1 for h in horizons):
+        raise ValueError("horizons must be nonempty positive integers")
+    if len(set(horizons)) != len(horizons):
+        raise ValueError("horizons must be distinct")
+    repeat_seeds = list(seeds) if seeds is not None else [seed]
+    if (not repeat_seeds or len(set(repeat_seeds)) != len(repeat_seeds)
+            or any(isinstance(s, bool) or not isinstance(s, int) or not 0 <= s < 2**32 for s in repeat_seeds)):
+        raise ValueError("seeds must be distinct integers in [0, 2**32)")
+    baseline = use_baseline or ckpt_path is None
+    if use_baseline and ckpt_path:
+        raise ValueError("choose either a trained checkpoint or the original baseline")
+    if seeds is not None and not baseline:
+        raise ValueError("multiple seeds apply only to the stochastic original baseline")
+    device = str(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    with _seeded(repeat_seeds[0]):
+        predictor = (_load_baseline_predictor(cfg, device, tokenizer_path) if baseline else
+                     _load_trained_predictor(ckpt_path, device, tokenizer_path))
+    manifest = ({"freq": cfg.freq, "market": cfg.market, "lookback_window": cfg.lookback_window,
+                 "return_horizon": cfg.return_horizon, "feature_cols": MAIN_COLUMNS}
+                if baseline else predictor.manifest)
+    lookback, horizon = int(manifest["lookback_window"]), max(horizons)
+    if horizon > manifest["return_horizon"]:
+        raise ValueError(f"requested horizon {horizon} exceeds model horizon {manifest['return_horizon']}")
+    if lookback < 2 or lookback > getattr(predictor, "max_context", cfg.max_context):
+        raise ValueError("lookback must be at least two and within the model max_context")
+    freq = manifest["freq"]
+    delta = bar_delta(freq)
     root = Path(cfg.dataset_path)
-    with open(root / "test_data.pkl", "rb") as f:
-        test_data: Dict[str, pd.DataFrame] = pickle.load(f)
-    with open(root / "exog_test.pkl", "rb") as f:
-        test_exog: Dict[str, pd.DataFrame] = pickle.load(f)
-
-    symbols = list(test_data.keys())
-    if max_symbols:
-        symbols = symbols[:max_symbols]
-    print(f"[data] {len(symbols)} symbols")
-
-    close_idx = cfg.feature_list.index("close")
-
-    records: List[Dict] = []
-
-    buf_x, buf_stamp, buf_exog, buf_meta = [], [], [], []
-
-    def flush():
-        if not buf_x:
-            return
-        x = torch.from_numpy(np.stack(buf_x)).to(device_t)
-        stamp = torch.from_numpy(np.stack(buf_stamp)).to(device_t)
-        exog = torch.from_numpy(np.stack(buf_exog)).to(device_t)
-
-        s1_ids, s2_ids = tok.encode(x, half=True)
-        _, _, q_pred = model(
-            s1_ids[:, :-1], s2_ids[:, :-1],
-            stamp=stamp[:, :-1], exog=exog[:, :-1],
-        )
-        # q_pred: [B, T-1, horizon, n_quantiles]  —— 取最后时刻的中位数
-        med = q_pred[:, -1, :, mid_q].cpu().numpy()  # [B, horizon]
-
-        for meta, score_vec in zip(buf_meta, med):
-            r = dict(meta)
-            for hi, s in enumerate(score_vec):
-                r[f"score_h{hi + 1}"] = float(s)
-            records.append(r)
-
-        buf_x.clear(); buf_stamp.clear(); buf_exog.clear(); buf_meta.clear()
-
-    flushes = 0
-
-    for si, sym in enumerate(symbols):
-        print(f"[sym {si + 1}/{len(symbols)}] {sym} (records so far: {len(records)})")
-        df = _build_window_features(test_data[sym], cfg.feature_list, cfg.time_feature_list)
-        edf = test_exog.get(sym)
-        if edf is None:
-            continue
-        if "datetime" in edf.columns:
-            ei = edf.set_index("datetime")
+    meta = _load_dataset_meta(root)
+    _validate_dataset_meta(meta, manifest, require_provenance=not baseline)
+    with (root / "test_data.pkl").open("rb") as fh:
+        raw_main = pickle.load(fh)
+    if not isinstance(raw_main, dict):
+        raise ValueError("test_data.pkl must map symbols to data frames")
+    raw_exog = {}
+    use_exog = not baseline and manifest.get("use_exog", True)
+    if use_exog:
+        with (root / "exog_test.pkl").open("rb") as fh:
+            raw_exog = pickle.load(fh)
+    symbols = sorted(raw_main)[:max_symbols]
+    frames, candidates = {}, {}
+    for symbol in symbols:
+        main = validate_main_frame(raw_main[symbol])
+        if use_exog:
+            if symbol not in raw_exog:
+                raise ValueError(f"missing exogenous data for {symbol}")
+            exog = validate_exog_frame(main, raw_exog[symbol], manifest["exog_cols"])
         else:
-            ei = edf
+            exog = None
+        starts = contiguous_starts(main.index, lookback + horizon, freq)
+        # Anchor against a shared UTC grid, not offsets relative to each listing date.
+        anchors = main.index[starts + lookback - 1]
+        starts = starts[((anchors - pd.Timestamp("1970-01-01")) // delta) % stride == 0]
+        candidates[symbol] = starts
+        frames[symbol] = (main, exog)
+    allowed = None
+    if per_symbol_limit:
+        dates = sorted({frames[s][0].index[int(start) + lookback - 1]
+                        for s in symbols for start in candidates[s]})
+        selected = np.linspace(0, len(dates) - 1, min(per_symbol_limit, len(dates)), dtype=int)
+        allowed = {dates[i] for i in selected}
 
-        total = len(df)
-        H = max(horizons)
-        window = lookback + 1  # 用 lookback+1 个 bar，最后一根用来预测未来 (模型 forward 是 T-1)
+    def evaluate(run_seed: int) -> dict:
+        records, main_buffer, exog_buffer, meta_buffer = [], [], [], []
 
-        step = max(1, int(stride))
-        starts = list(range(0, total - window - H + 1, step))
-        if per_symbol_limit and per_symbol_limit > 0:
-            # Take an evenly spaced slice so we still cover the whole test
-            # window; useful for CPU smoke checks without biasing to the
-            # start/end of the series.
-            if len(starts) > per_symbol_limit:
-                idx = np.linspace(0, len(starts) - 1, per_symbol_limit).astype(int)
-                starts = [starts[i] for i in idx]
+        def flush():
+            if not main_buffer:
+                return
+            if baseline:
+                scores = _baseline_scores(predictor, main_buffer, horizon, freq)
+            else:
+                quantiles = np.asarray(predictor.predict_batch(main_buffer, exog_buffer))
+                expected = (len(main_buffer), manifest["return_horizon"], manifest["n_quantiles"])
+                if quantiles.shape != expected or not np.isfinite(quantiles).all():
+                    raise ValueError("trained predictor returned invalid quantile shape or values")
+                mid = manifest["n_quantiles"] // 2
+                scores = quantiles[:, :, mid]
+            for info, values in zip(meta_buffer, scores):
+                records.append({**info, **{f"score_h{h}": float(values[h - 1]) for h in horizons}})
+            main_buffer.clear()
+            exog_buffer.clear()
+            meta_buffer.clear()
 
-        for start in starts:
-            end = start + window
-            win = df.iloc[start:end]
-
-            x = win[cfg.feature_list].values.astype(np.float32)
-            past = x[:lookback]
-            mu, sd = past.mean(0), past.std(0)
-            x_norm = np.clip((x - mu) / (sd + 1e-5), -cfg.clip, cfg.clip)
-
-            stamp = win[cfg.time_feature_list].values.astype(np.float32)
-
-            dates = pd.to_datetime(win["datetime"].values)
-            ex = ei.reindex(dates).fillna(0.0).values.astype(np.float32)
-            if ex.shape[1] != cfg.n_exog:
-                t = cfg.n_exog
-                if ex.shape[1] < t:
-                    pad = np.zeros((ex.shape[0], t - ex.shape[1]), dtype=np.float32)
-                    ex = np.concatenate([ex, pad], axis=1)
-                else:
-                    ex = ex[:, :t]
-
-            # True future log-returns
-            close_raw = df["close"].values
-            pivot_idx = end - 1
-            c0 = close_raw[pivot_idx]
-            pivot_dt = pd.Timestamp(df["datetime"].iloc[pivot_idx])
-            meta = {
-                "symbol": sym,
-                "date": pivot_dt,
-                "bucket": _bucket_label(pivot_dt, bucket_key),
-            }
-            for h in horizons:
-                cf = close_raw[pivot_idx + h]
-                meta[f"ret_h{h}"] = float(np.log(cf / c0))
-
-            buf_x.append(x_norm)
-            buf_stamp.append(stamp)
-            buf_exog.append(ex)
-            buf_meta.append(meta)
-
-            if len(buf_x) >= batch_size:
-                flush()
-                flushes += 1
-                if flushes % 50 == 0:
-                    print(f"  [batch] {flushes} flushes, {len(records)} records")
-
-        if (si + 1) % 30 == 0:
-            print(f"[progress] {si + 1}/{len(symbols)} symbols, "
-                  f"records so far: {len(records)}")
-
-    flush()
-    df_rec = pd.DataFrame.from_records(records)
-    print(f"[done] total records: {len(df_rec)}")
-
-    # --- Compute ICs ---
-    report: Dict = {
-        "n_records": int(len(df_rec)),
-        "n_symbols": int(df_rec["symbol"].nunique()),
-        "date_range": [str(df_rec["date"].min()), str(df_rec["date"].max())],
-        "overall": {},
-        "by_date_mean": {},
-    }
-
-    for h in horizons:
-        score_col = f"score_h{h}"
-        ret_col = f"ret_h{h}"
-        sub = df_rec[[score_col, ret_col]].dropna()
-        if len(sub) < 2:
-            continue
-
-        # 全体 pool IC
-        p_all = pearsonr(sub[score_col], sub[ret_col])
-        s_all = spearmanr(sub[score_col], sub[ret_col])
-        report["overall"][f"h{h}"] = {
-            "pearson": float(p_all.statistic),
-            "pearson_p": float(p_all.pvalue),
-            "spearman": float(s_all.statistic),
-            "spearman_p": float(s_all.pvalue),
-            "n": int(len(sub)),
-            "hit_rate": float(((sub[score_col] > 0) == (sub[ret_col] > 0)).mean()),
+        with _seeded(run_seed):
+            for symbol in symbols:
+                main, exog = frames[symbol]
+                for start in candidates[symbol]:
+                    anchor = int(start) + lookback - 1
+                    date = main.index[anchor]
+                    if allowed is not None and date not in allowed:
+                        continue
+                    # Validate only this target span; full series validation already ran once.
+                    targets = log_return_targets(main.close.iloc[anchor:anchor + horizon + 1], 0, horizon)
+                    main_buffer.append(main.iloc[start:anchor + 1])
+                    exog_buffer.append(exog.iloc[start:anchor + 1] if exog is not None else None)
+                    meta_buffer.append({"symbol": symbol, "date": date,
+                                        **{f"ret_h{h}": float(targets[h - 1]) for h in horizons}})
+                    if len(main_buffer) >= batch_size:
+                        flush()
+            flush()
+        report = summarize_records(records, horizons, aggregation)
+        report.update(seed=run_seed, model={
+            "mode": "original_kronos" if baseline else "kairos_log_return_v2",
+            "source": cfg.pretrained_predictor_path if baseline else str(ckpt_path),
+            "tokenizer_source": (tokenizer_path or cfg.pretrained_tokenizer_path) if baseline else "bundle",
+        })
+        report["evaluation"] = {
+            "freq": freq, "lookback_window": lookback, "horizons": horizons,
+            "stride": stride, "per_symbol_limit": per_symbol_limit, "batch_size": batch_size,
+            "sampling": "shared_utc_anchor_grid", "dataset_meta_present": bool(meta),
+            "seed_scope": "same software, device, batch size and ordered dataset",
         }
+        return report
 
-        # Cross-sectional IC per bucket (date / hour / minute / pool),
-        # then averaged — this is the number that matters in production
-        # because it reflects ability to *rank* names at one point in time.
-        bucket_ic = df_rec.dropna(subset=[score_col, ret_col]).groupby("bucket").apply(
-            lambda g: pd.Series({
-                "pearson": pearsonr(g[score_col], g[ret_col]).statistic
-                if len(g) > 2 and g[score_col].std() > 0 and g[ret_col].std() > 0 else np.nan,
-                "spearman": spearmanr(g[score_col], g[ret_col]).statistic
-                if len(g) > 2 else np.nan,
-                "n": len(g),
-            }), include_groups=False,
-        )
-        ic_mean = bucket_ic["pearson"].mean()
-        ric_mean = bucket_ic["spearman"].mean()
-        ic_std = bucket_ic["pearson"].std()
-        icir = ic_mean / (ic_std + 1e-9)
-        report["by_date_mean"][f"h{h}"] = {
-            "ic": float(ic_mean),
-            "rank_ic": float(ric_mean),
-            "icir": float(icir),
-            "n_dates": int(bucket_ic["pearson"].notna().sum()),
-            "bucket": bucket_key,
-        }
-
-    return report
+    runs = [evaluate(run_seed) for run_seed in repeat_seeds]
+    if seeds is None:
+        return runs[0]
+    return {"seeds": repeat_seeds, "runs": runs, "seed_summary": _seed_summary(runs, horizons),
+            "methodology": runs[0]["methodology"]}
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=False, default=None,
-                    help="path to best_model directory; omit to use Kronos-small baseline")
-    ap.add_argument("--baseline", action="store_true",
-                    help="use KronosWithExogenous.from_kronos_pretrained (random heads) baseline")
+    ap = argparse.ArgumentParser(description=__doc__)
+    model = ap.add_mutually_exclusive_group()
+    model.add_argument("--ckpt", help="version 2 log-return bundle directory")
+    model.add_argument("--baseline", action="store_true", help="sample actual original-Kronos price forecasts")
     ap.add_argument("--out", default="artifacts/backtest_report.json")
-    ap.add_argument("--horizons", default="1,5", help="comma-separated list")
+    ap.add_argument("--horizons", default="1,5", help="distinct h in 1..model return_horizon")
     ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--max-symbols", type=int, default=None)
-    ap.add_argument("--market", default=None,
-                    help="override market preset (crypto); "
-                         "default: read from dataset meta.json or fall back "
-                         "to the TrainConfig default (crypto).")
-    ap.add_argument("--dataset-path", default=None,
-                    help="override TrainConfig.dataset_path when pointing "
-                         "the backtest at a specific prepared bundle")
-    ap.add_argument("--preset", default=None,
-                    help="named preset from kairos.training.config.preset_for "
-                         "(e.g. 'crypto-1min'); overrides --market/freq")
-    ap.add_argument("--aggregation", default="auto",
-                    help="cross-sectional bucket: auto / date / hour / minute / none")
-    ap.add_argument("--stride", type=int, default=1,
-                    help="只对每 N 根 bar 取一个窗口用于评估（CPU smoke 友好；"
-                         "GPU 全量回测保持默认 1）")
-    ap.add_argument("--per-symbol-limit", type=int, default=0,
-                    help=">0 时每个 symbol 最多评估 N 个窗口（等距抽样覆盖全区间）")
-    ap.add_argument("--tokenizer", default=None,
-                    help="override tokenizer checkpoint / repo；默认优先本地 artifacts/checkpoints/tokenizer/checkpoints/best_model")
-    ap.add_argument("--predictor", default=None,
-                    help="override baseline predictor source repo / path；默认使用 cfg.pretrained_predictor_path")
+    ap.add_argument("--max-symbols", type=int)
+    ap.add_argument("--market", help="baseline market; trained model metadata is authoritative")
+    ap.add_argument("--dataset-path")
+    ap.add_argument("--preset", help="baseline preset, e.g. crypto-1min")
+    ap.add_argument("--aggregation", default="auto", help="average timestamp IC by date/hour/minute/none")
+    ap.add_argument("--stride", type=int, default=1, help="sample on a shared UTC grid of N bars")
+    ap.add_argument("--per-symbol-limit", type=int, default=0, help="shared maximum N anchor timestamps")
+    ap.add_argument("--tokenizer", help="explicit original tokenizer source; trained bundles bind their tokenizer")
+    ap.add_argument("--predictor", help="original baseline predictor source")
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--seed", type=int, default=100)
+    ap.add_argument("--seeds", help="comma-separated independent baseline seeds; writes runs and mean/std")
     args = ap.parse_args()
-
-    overrides: dict = {}
-    if args.preset:
-        overrides.update(preset_for(args.preset))
-    if args.dataset_path:
-        overrides["dataset_path"] = args.dataset_path
-    if args.market:
-        overrides["market"] = args.market
-    if args.predictor:
-        overrides["pretrained_predictor_path"] = args.predictor
-
-    cfg = TrainConfig(**overrides) if overrides else TrainConfig()
-
-    # Auto-hydrate market/freq from the dataset manifest when the user
-    # didn't override them. This keeps backtest_ic usable as
-    #     python -m kairos.training.backtest_ic --ckpt ...
-    # regardless of which market produced the bundle.
+    overrides = preset_for(args.preset) if args.preset else {}
+    for arg, name in ((args.dataset_path, "dataset_path"), (args.market, "market"),
+                      (args.predictor, "pretrained_predictor_path")):
+        if arg is not None:
+            overrides[name] = arg
+    cfg = TrainConfig(**overrides)
     meta = _load_dataset_meta(cfg.dataset_path)
-    if meta:
-        if "market" in meta and "market" not in overrides:
-            cfg.market = meta["market"]
-        if "freq" in meta and "freq" not in overrides:
-            cfg.freq = meta["freq"]
-
-    horizons = [int(h) for h in args.horizons.split(",")]
+    for field in ("market", "freq"):
+        if field in meta and field not in overrides:
+            setattr(cfg, field, meta[field])
     report = run_backtest(
-        args.ckpt, cfg,
-        horizons=horizons,
-        batch_size=args.batch_size,
-        max_symbols=args.max_symbols,
-        use_baseline=args.baseline,
-        aggregation=args.aggregation,
-        stride=args.stride,
-        per_symbol_limit=args.per_symbol_limit or None,
-        tokenizer_path=args.tokenizer,
+        args.ckpt, cfg, horizons=[int(h) for h in args.horizons.split(",")],
+        batch_size=args.batch_size, max_symbols=args.max_symbols, device=args.device,
+        use_baseline=args.baseline, aggregation=args.aggregation, stride=args.stride,
+        per_symbol_limit=args.per_symbol_limit or None, tokenizer_path=args.tokenizer,
+        seed=args.seed, seeds=[int(s) for s in args.seeds.split(",")] if args.seeds else None,
     )
-
-    out_p = Path(args.out)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-    out_p.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"[save] {out_p}")
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    output = Path(args.out)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    print(f"[save] {output}")
+    print(json.dumps(report.get("seed_summary", report.get("by_date_mean")), indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":
