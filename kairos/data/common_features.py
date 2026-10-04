@@ -12,10 +12,14 @@ normalised with a 60-bar rolling z-score where appropriate.
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import numpy as np
 import pandas as pd
+
+
+log = logging.getLogger("kairos.common_features")
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +131,8 @@ def build_common_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     o, h, l, c = df["open"], df["high"], df["low"], df["close"]
     v = df["volume"].astype(float)
-    a = df["amount"].astype(float) if "amount" in df.columns else (c * v)
+    amount_proxy = c * v
+    a = df["amount"].astype(float).fillna(amount_proxy) if "amount" in df.columns else amount_proxy
 
     # Returns
     df["log_ret_1"] = np.log(c / c.shift(1))
@@ -158,9 +163,23 @@ def build_common_features(df: pd.DataFrame) -> pd.DataFrame:
     # Volume / price
     df["obv_z"] = rolling_z(_obv(c, v), 60)
     df["mfi_14"] = _mfi(h, l, c, v, 14) / 100.0 - 0.5
-    df["amount_z"] = rolling_z(np.log1p(a), 60)
-    vwap = a / (v + 1e-9)
-    df["vwap_dev"] = (c - vwap) / (vwap + 1e-9)
+    # Invalid turnover is missing evidence, not a zero-valued observation.
+    valid_amount = a.where(np.isfinite(a) & (a >= 0))
+    df["amount_z"] = rolling_z(np.log1p(valid_amount), 60)
+    valid_vwap = np.isfinite(v) & (v > 0) & np.isfinite(a) & (a > 0)
+    vwap = a.where(valid_vwap) / v.where(valid_vwap)
+    valid_vwap &= np.isfinite(vwap) & (vwap > 0) & np.isfinite(c) & (c > 0)
+    proxy_vwap = valid_vwap & (a == amount_proxy)
+    # No independent trade price exists for zero volume or close*volume proxies.
+    df["vwap_dev"] = ((c - vwap) / vwap).where(valid_vwap & ~proxy_vwap, 0.0)
+    unavailable_count = int((~valid_vwap).sum())
+    proxy_count = int(proxy_vwap.sum())
+    if unavailable_count or proxy_count:
+        log.warning(
+            "VWAP diagnostics: unavailable=%d, amount=close*volume=%d of %d bars; "
+            "vwap_dev neutralized (matching amounts may be estimated)",
+            unavailable_count, proxy_count, len(df),
+        )
 
     # Microstructure
     df["amplitude"] = (h - l) / (c.shift(1) + 1e-9)

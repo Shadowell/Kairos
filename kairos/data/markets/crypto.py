@@ -30,7 +30,6 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
-from ..common_features import rolling_z
 from .base import FeatureContext, FetchTask, MarketAdapter, register_adapter
 from .crypto_exchanges import (
     CryptoExchange,
@@ -429,6 +428,8 @@ class CryptoAdapter(MarketAdapter):
         * ``hour_sin`` / ``hour_cos`` encode the 24h intraday cycle.
         * ``funding_rate`` / ``funding_rate_z`` / ``oi_change`` / ``basis`` are
           swap-specific. Spot datasets keep them at zero.
+        * ``funding_rate_z`` uses the trailing three days of available bars,
+          spanning multiple settlements even for minute data.
 
         Optional sidecars are supplied through ``context.extras``:
 
@@ -475,7 +476,13 @@ class CryptoAdapter(MarketAdapter):
         # --- funding rate (swap only) ---
         funding = _align_series(extras.get("funding_rate"), dt)
         out["funding_rate"] = funding.fillna(0.0).values
-        out["funding_rate_z"] = rolling_z(funding.fillna(0.0), 60).fillna(0.0).values
+        funding_timed = pd.Series(funding.to_numpy(), index=pd.DatetimeIndex(dt))
+        # Keep leading gaps missing: a missing rate is not a zero-rate settlement.
+        funding_window = funding_timed.rolling("3D", min_periods=2)
+        funding_sd = funding_window.std().replace(0.0, np.nan)
+        out["funding_rate_z"] = (
+            (funding_timed - funding_window.mean()) / funding_sd
+        ).replace([np.inf, -np.inf], np.nan).fillna(0.0).values
 
         # --- open-interest change (swap only) ---
         oi = _align_series(extras.get("open_interest"), dt)
