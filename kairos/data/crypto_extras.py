@@ -42,9 +42,12 @@ Why separate parquet per kind
 from __future__ import annotations
 
 import logging
+from numbers import Number
 from pathlib import Path
+import tempfile
 from typing import Dict, Iterable, Optional
 
+import numpy as np
 import pandas as pd
 
 
@@ -127,39 +130,106 @@ def market_wide_path(raw_dir: Path, kind: str) -> Path:
 # ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
+def _utc_time_index(values, label: str) -> pd.DatetimeIndex:
+    """Parse real timestamps as UTC, never infer numeric indexes as epochs."""
+    index = pd.Index(values)
+    if (pd.api.types.is_numeric_dtype(index.dtype)
+            or (not isinstance(index, pd.DatetimeIndex)
+                and any(isinstance(value, Number) for value in index))):
+        raise ValueError(f"{label} requires timestamps, not a numeric index")
+    try:
+        parsed = pd.DatetimeIndex(pd.to_datetime(index, utc=True, format="mixed"))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError(f"{label} contains invalid timestamps") from exc
+    if parsed.hasnans:
+        raise ValueError(f"{label} contains NaT")
+    if not parsed.is_unique:
+        raise ValueError(f"{label} contains duplicate or conflicting absolute timestamps")
+    return parsed.tz_localize(None).rename("datetime")
+
+
+def _numeric_payload(values) -> np.ndarray:
+    """Allow explicit missing measurements, but reject malformed or infinite ones."""
+    try:
+        numeric = pd.to_numeric(pd.Series(values), errors="raise")
+        result = numeric.to_numpy(dtype=float, na_value=np.nan)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("sidecar payload must be numeric or missing") from exc
+    if np.isinf(result).any():
+        raise ValueError("sidecar payload must not contain infinite values")
+    return result
+
+
 def _normalise(df: pd.DataFrame, payload_col: str) -> pd.DataFrame:
     """Coerce ``df`` to the canonical ``datetime`` + ``<payload_col>`` schema.
 
-    Accepts either a DataFrame already in that shape or a single-column
-    DataFrame / Series indexed by datetime. Duplicate timestamps are
-    dropped (keeping the last observation).
+    Accepts a timestamp column or a datetime-indexed single payload. Malformed
+    times and duplicate absolute timestamps are rejected without dropping rows.
     """
 
-    if df is None or len(df) == 0:
-        return pd.DataFrame(columns=["datetime", payload_col])
+    try:
+        if df is None or (isinstance(df, (pd.DataFrame, pd.Series)) and len(df) == 0):
+            return pd.DataFrame({"datetime": pd.Series(dtype="datetime64[ns]"),
+                                 payload_col: pd.Series(dtype=float)})
+        if isinstance(df, pd.Series):
+            df = df.to_frame(name=payload_col)
+        if not isinstance(df, pd.DataFrame) or not df.columns.is_unique:
+            raise ValueError("sidecar must be a DataFrame or Series with unique columns")
+        if payload_col not in df.columns:
+            if "datetime" not in df.columns and df.shape[1] == 1:
+                df = df.rename(columns={df.columns[0]: payload_col})
+            else:
+                raise ValueError(f"sidecar is missing required payload column {payload_col!r}")
+        times = df["datetime"] if "datetime" in df.columns else df.index
+        dates = _utc_time_index(times, "sidecar datetime")
+        out = pd.DataFrame({"datetime": dates, payload_col: _numeric_payload(df[payload_col])})
+        return out.sort_values("datetime", kind="stable").reset_index(drop=True)
+    except ValueError as exc:
+        log.error("Invalid sidecar: %s", exc)
+        raise
 
-    if isinstance(df, pd.Series):
-        df = df.to_frame(name=payload_col)
 
-    if payload_col not in df.columns:
-        # Infer: DataFrame indexed by datetime with one unnamed column.
-        if df.shape[1] == 1:
-            df = df.rename(columns={df.columns[0]: payload_col})
-        else:
-            raise ValueError(
-                f"expected a frame with '{payload_col}' column, got {list(df.columns)}"
-            )
+def _read_sidecar(path: Path, payload_col: str) -> pd.DataFrame:
+    try:
+        frame = pd.read_parquet(path)
+        if len(frame) == 0:
+            return _normalise(frame, payload_col)
+        if "datetime" not in frame.columns or payload_col not in frame.columns:
+            raise ValueError(f"expected datetime and {payload_col} columns")
+        return _normalise(frame, payload_col)
+    except Exception as exc:
+        log.error("Invalid existing sidecar %s: %s", path, exc)
+        raise ValueError(f"Invalid existing sidecar {path}: {exc}") from exc
 
-    out = df.reset_index() if df.index.name == "datetime" else df.copy()
-    if "datetime" not in out.columns:
-        # Last resort: treat the index as datetime.
-        out = df.reset_index().rename(columns={df.index.name or "index": "datetime"})
 
-    out["datetime"] = pd.to_datetime(out["datetime"], utc=True, errors="coerce").dt.tz_convert(None)
-    out = out.dropna(subset=["datetime"])
-    out = out[["datetime", payload_col]].drop_duplicates("datetime").sort_values("datetime")
-    out[payload_col] = pd.to_numeric(out[payload_col], errors="coerce")
-    return out.reset_index(drop=True)
+def _save_sidecar(path: Path, df, payload_col: str, merge_existing: bool) -> Path:
+    normalised = _normalise(df, payload_col)
+    if merge_existing and path.exists():
+        previous = _read_sidecar(path, payload_col)
+        if normalised.empty:
+            return path
+        if not previous.empty:
+            combined = pd.concat([previous, normalised], ignore_index=True)
+            # A retried download may repeat an identical observation. A changed
+            # value at the same instant requires an explicit historical rewrite.
+            combined = combined.drop_duplicates(["datetime", payload_col])
+            try:
+                normalised = _normalise(combined, payload_col)
+            except ValueError as exc:
+                log.error("Cannot merge sidecar %s: %s", path, exc)
+                raise ValueError(f"Cannot merge sidecar {path}: {exc}") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".parquet", delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        normalised.to_parquet(temporary, index=False)
+        temporary.replace(path)
+    except Exception:
+        log.exception("Failed to write sidecar %s; existing history was preserved", path)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
 
 
 def save_per_symbol(
@@ -185,25 +255,13 @@ def save_per_symbol(
         by ``kind`` (see :data:`_PAYLOAD_COL`).
     merge_existing : bool
         If True (default), merge with whatever is already on disk and
-        dedupe by timestamp. Set to False to overwrite atomically.
+        dedupe identical observations. Conflicting values fail without changing
+        history. Set to False to explicitly overwrite atomically.
     """
 
     payload = _PAYLOAD_COL[kind]
-    normalised = _normalise(df, payload)
     out = per_symbol_path(raw_dir, kind, symbol_stem)
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    if merge_existing and out.exists():
-        try:
-            prev = pd.read_parquet(out)
-            normalised = pd.concat([prev, normalised], ignore_index=True)
-            normalised = normalised.drop_duplicates("datetime").sort_values("datetime")
-            normalised = normalised.reset_index(drop=True)
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"failed to merge existing {out}: {e}; overwriting")
-
-    normalised.to_parquet(out, index=False)
-    return out
+    return _save_sidecar(out, df, payload, merge_existing)
 
 
 def save_market_wide(
@@ -216,21 +274,8 @@ def save_market_wide(
     """Write a market-wide channel such as the BTC/USDT reference close."""
 
     payload = _PAYLOAD_COL[kind]
-    normalised = _normalise(df, payload)
     out = market_wide_path(raw_dir, kind)
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    if merge_existing and out.exists():
-        try:
-            prev = pd.read_parquet(out)
-            normalised = pd.concat([prev, normalised], ignore_index=True)
-            normalised = normalised.drop_duplicates("datetime").sort_values("datetime")
-            normalised = normalised.reset_index(drop=True)
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"failed to merge existing {out}: {e}; overwriting")
-
-    normalised.to_parquet(out, index=False)
-    return out
+    return _save_sidecar(out, df, payload, merge_existing)
 
 
 # ---------------------------------------------------------------------------
@@ -239,20 +284,7 @@ def save_market_wide(
 def _read_datetime_series(path: Path, payload_col: str) -> Optional[pd.Series]:
     if not path.exists():
         return None
-    try:
-        df = pd.read_parquet(path)
-    except Exception as e:  # noqa: BLE001
-        log.warning(f"failed to read {path}: {e}")
-        return None
-    if "datetime" not in df.columns or payload_col not in df.columns:
-        log.warning(
-            f"{path} missing expected columns; have {list(df.columns)}, "
-            f"need datetime and {payload_col}"
-        )
-        return None
-    df = df[["datetime", payload_col]].dropna(subset=["datetime"])
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df = df.drop_duplicates("datetime").sort_values("datetime")
+    df = _read_sidecar(path, payload_col)
     return df.set_index("datetime")[payload_col]
 
 

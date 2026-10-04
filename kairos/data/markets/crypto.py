@@ -30,6 +30,7 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
+from ..crypto_extras import _numeric_payload, _utc_time_index
 from .base import FeatureContext, FetchTask, MarketAdapter, register_adapter
 from .crypto_exchanges import (
     CryptoExchange,
@@ -49,34 +50,46 @@ DEFAULT_EXCHANGE = "okx"
 def _align_series(source, dt: pd.Series) -> pd.Series:
     """Align an optional external series to the feature window timestamps.
 
-    Returns a Series with NaN for every bar when ``source`` is missing or
-    not alignable. The caller decides the fill policy (zero, forward-fill,
-    clip) so this helper stays pure.
+    Only absent/empty channels become all-NaN. Supplied malformed data fails
+    visibly. Timestamped inputs use past observations only; one-dimensional
+    arrays retain the legacy positional API when their length matches bars.
     """
 
-    if source is None:
-        return pd.Series(np.nan, index=range(len(dt)))
-    if isinstance(source, pd.Series):
-        s = source
-    elif isinstance(source, pd.DataFrame):
-        if source.shape[1] == 0:
-            return pd.Series(np.nan, index=range(len(dt)))
-        s = source.iloc[:, 0]
-    else:
-        arr = np.asarray(source).reshape(-1)
-        if len(arr) != len(dt):
-            return pd.Series(np.nan, index=range(len(dt)))
-        return pd.Series(arr, index=range(len(dt)))
-
-    if not isinstance(s.index, pd.DatetimeIndex):
-        try:
-            s = s.copy()
-            s.index = pd.to_datetime(s.index)
-        except Exception:  # noqa: BLE001
-            return pd.Series(np.nan, index=range(len(dt)))
-    reindexed = s.reindex(dt.values, method="ffill")
-    reindexed.index = range(len(dt))
-    return reindexed
+    try:
+        target = _utc_time_index(dt, "main datetime")
+        if not target.is_monotonic_increasing:
+            raise ValueError("main datetime must be sorted")
+        if source is None:
+            return pd.Series(np.nan, index=range(len(target)))
+        if isinstance(source, (pd.Series, pd.DataFrame)):
+            if len(source) == 0:
+                return pd.Series(np.nan, index=range(len(target)))
+            if isinstance(source, pd.DataFrame):
+                if not source.columns.is_unique:
+                    raise ValueError("sidecar columns must be unique")
+                columns = [column for column in source.columns if column != "datetime"]
+                if len(columns) != 1:
+                    raise ValueError("sidecar must contain exactly one payload column")
+                times = source["datetime"] if "datetime" in source.columns else source.index
+                values = source[columns[0]]
+            else:
+                times, values = source.index, source
+            dates = _utc_time_index(times, "sidecar datetime index")
+            series = pd.Series(_numeric_payload(values), index=dates).sort_index(kind="stable")
+            return series.reindex(target, method="ffill").reset_index(drop=True)
+        if not isinstance(source, (np.ndarray, list, tuple)):
+            raise ValueError("sidecar must be a Series, DataFrame, or one-dimensional array")
+        array = np.asarray(source)
+        if array.ndim != 1:
+            raise ValueError("positional sidecar must be a one-dimensional array")
+        if not len(array):
+            return pd.Series(np.nan, index=range(len(target)))
+        if len(array) != len(target):
+            raise ValueError("positional sidecar length must match main bars")
+        return pd.Series(_numeric_payload(array), index=range(len(target)))
+    except (ValueError, TypeError) as exc:
+        log.error("Invalid sidecar alignment: %s", exc)
+        raise ValueError(f"Invalid sidecar alignment: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +346,9 @@ class CryptoAdapter(MarketAdapter):
             else:
                 try:
                     df = hook(task.symbol, start_ms=start_ms, end_ms=end_ms)
+                except (ValueError, TypeError, KeyError) as e:
+                    log.error("[%s] invalid funding data: %s", task.symbol, e)
+                    raise
                 except Exception as e:  # noqa: BLE001
                     log.warning(f"[{task.symbol}] funding fetch failed: {e}")
                 else:
@@ -349,6 +365,9 @@ class CryptoAdapter(MarketAdapter):
             else:
                 try:
                     df = hook(task.symbol, freq=oi_freq, start_ms=start_ms, end_ms=end_ms)
+                except (ValueError, TypeError, KeyError) as e:
+                    log.error("[%s] invalid OI data: %s", task.symbol, e)
+                    raise
                 except Exception as e:  # noqa: BLE001
                     log.warning(f"[{task.symbol}] OI fetch failed: {e}")
                 else:
@@ -371,14 +390,14 @@ class CryptoAdapter(MarketAdapter):
                         start_ms=start_ms,
                         end_ms=end_ms,
                     )
+                    if df is not None and len(df) > 0:
+                        # Canonical spot bars provide one timestamp and close.
+                        out[_ce.KIND_SPOT] = df[["datetime", "close"]].copy()
+                except (ValueError, TypeError, KeyError) as e:
+                    log.error("[%s] invalid spot %s data: %s", task.symbol, spot_symbol, e)
+                    raise
                 except Exception as e:  # noqa: BLE001
                     log.warning(f"[{task.symbol}] spot {spot_symbol} fetch failed: {e}")
-                else:
-                    if df is not None and len(df) > 0:
-                        # fetch_spot_ohlcv returns the canonical STD_COLS; we
-                        # only keep datetime + close for basis computation.
-                        spot = df[["datetime", "close"]].copy()
-                        out[_ce.KIND_SPOT] = spot
 
         if _ce.KIND_REFERENCE in kinds:
             hook = getattr(ex, "fetch_spot_ohlcv", None)
@@ -399,13 +418,15 @@ class CryptoAdapter(MarketAdapter):
                         start_ms=start_ms,
                         end_ms=end_ms,
                     )
+                    if df is not None and len(df) > 0:
+                        out[_ce.KIND_REFERENCE] = df[["datetime", "close"]].copy()
+                except (ValueError, TypeError, KeyError) as e:
+                    log.error("[%s] invalid reference %s data: %s", task.symbol, reference_symbol, e)
+                    raise
                 except Exception as e:  # noqa: BLE001
                     log.warning(
                         f"[{task.symbol}] reference {reference_symbol} fetch failed: {e}"
                     )
-                else:
-                    if df is not None and len(df) > 0:
-                        out[_ce.KIND_REFERENCE] = df[["datetime", "close"]].copy()
 
         return out
 
@@ -451,11 +472,12 @@ class CryptoAdapter(MarketAdapter):
 
         out = pd.DataFrame(index=df.index)
         n = len(df)
-        dt = (
-            pd.to_datetime(df["datetime"])
-            if "datetime" in df.columns
-            else pd.to_datetime(df.index)
-        )
+        try:
+            timestamps = df["datetime"] if "datetime" in df.columns else df.index
+            dt = pd.Series(_utc_time_index(timestamps, "main datetime"))
+        except ValueError as exc:
+            log.error("Invalid market feature timestamps: %s", exc)
+            raise
         extras = context.extras if context is not None else {}
 
         # --- market reference momentum/volatility (spot + swap) ---
