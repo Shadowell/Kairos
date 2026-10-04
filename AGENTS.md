@@ -57,6 +57,7 @@ Kairos/
 │   ├── AUTODL_REMOTE_TRAINING_GUIDE.md      # 远程 GPU 训练与 checkpoint 回传
 │   ├── CRYPTO_DATA_SOURCE_AND_EXCHANGE_GUIDE.md # crypto 数据源/交易所/网络配置
 │   ├── CRYPTO_BTC_ETH_2Y_SPOT_RUN.md        # BTC+ETH 两年现货 predictor 实验记录
+│   ├── ARCHITECTURE_REDESIGN_MULTI_SCALE_ALPHA.md # 工业级多尺度量化架构设计说明书
 │   ├── CRYPTO_TOP100_1Y_SPOT_RUN.md         # Top100 一年现货 predictor 实验记录
 │   ├── CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md # OKX 现货/永续外生因子训练计划
 │   ├── CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md # 5/15/30 统一窗口因子提案

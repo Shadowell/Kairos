@@ -60,6 +60,8 @@
 
 ### 判断下一步做什么
 
+- [ARCHITECTURE_REDESIGN_MULTI_SCALE_ALPHA.md](ARCHITECTURE_REDESIGN_MULTI_SCALE_ALPHA.md)
+  工业级多尺度量化时序模型架构设计说明书（Multi-Scale Alpha Architecture），解决宏观与微观错配、目标解耦与统一特征引擎。
 - [PROJECT_ROADMAP_AND_NEXT_STEPS.md](PROJECT_ROADMAP_AND_NEXT_STEPS.md)
   当前路线图、优先级、验收标准和时间估计。
 - [CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md](CRYPTO_OKX_SPOT_PERP_EXOGENOUS_PLAN.md)
