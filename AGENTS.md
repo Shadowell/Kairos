@@ -261,7 +261,7 @@ EOF
 |The training log shows `[TRAIN] pool=327610, using 5000/epoch.`, val_ce only dropped by 0.006 after 10 epochs, and negative migration occurred in backtest|`KAIROS_N_TRAIN_ITER=5000` was left in the previous mini run, but was not cleared in the official run → Only 5000 samples are randomly selected per epoch = 1.5% of the pool|**Before officially running `unset KAIROS_N_TRAIN_ITER`** let it run default 50000; self-check to see if the proportion of `using Y/X` is ≥ 5%. See `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` §8.1 for details|
 |`backtest_ic --aggregation date` Output `n_dates: 3, icir: +1.17` (looks good but something is wrong)|The test area only has 3 days → the date bucket has only 3 ICs to calculate mean/std, and the ICIR is completely noise|If the test area is < 5 days, use `--aggregation none` to view `overall.spearman`; if the test area is ≥ 15 days, use `by_date_mean`. For the complete decision tree, see `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §2|
 |`--baseline` ran out h30 ICIR=+0.42, looking at the original weight of Kronos, there is alpha|Random head + Kronos hidden can produce an artificially high ICIR under the scale of 100 symbols × 78 days|**MUST** report both baseline and finetuned, looking at Δ rather than absolute values. See `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §5 for details|
-|The training ckpt is overwritten (such as the new perp run overwriting the last spot ckpt)|`train_predictor.py` defaults to `artifacts/checkpoints/predictor/checkpoints/best_model/` without run name|`cp -r best_model best_model_<run-name>_backup` before running a new run; next time it is best to change the best_model writing method to the hash/timestamp subdirectory|
+|旧训练覆盖 checkpoint|旧版使用固定 best_model 目录|2026-10-05 修复：predictor 每次使用独立 run_id，包含精确 tokenizer 与 v2 manifest；显式名称已存在时拒绝覆盖|
 
 See `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`'s "Common Pitfalls" section for more, and `docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md`'s complete post-mortem.
 
@@ -269,7 +269,7 @@ See `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`'s "Common Pitfalls" section for more,
 
 ## 8. 当前训练/回测基线
 
-### crypto 1min(crypto-1min)
+### crypto 1min 历史实验（旧评测口径）
 
 | run | universe | h30 rank-IC (finetuned) | h30 ICIR |Details|
 |---|---|---|---|---|
@@ -277,7 +277,7 @@ See `docs/AUTODL_REMOTE_TRAINING_GUIDE.md`'s "Common Pitfalls" section for more,
 | Top100 1y spot |100 coins × 1 year| +0.030 | **+0.454** | `docs/CRYPTO_TOP100_1Y_SPOT_RUN.md` |
 | Top10 30d perp ⚠️ |10 coins × 30 days|+0.016 (n=3 noise)| +0.06 |`docs/CRYPTO_OKX_PERP_TOP10_30D_RUN_POSTMORTEM.md` (negative migration post-mortem)|
 
-h30 is currently the only valid horizon (preset `return_horizon=30` aligned), h1/h5 is not really supervised due to the training target dimension design, and the IC is close to 0 or reverse. For improvement directions, see `docs/BACKTEST_IC_INTERPRETATION_GUIDE.md` §4 and `docs/TRAINING_TUNING_PLAYBOOK.md` §8.2.
+以上为旧版训练/回测的历史结果，不代表新版 contract v2 的有效性。2026-10-05 起 h=1..return_horizon 都在最后历史锚点监督原始 log-return；旧版“只有 h30 被监督”的解释与训练代码不一致，不再沿用。新评测先按同一时间跨币种计算 IC，再按日/小时汇总，需重训和重测后建立新基线。
 
 ### BSQ Tokenizer（crypto-1min, Kairos-base-crypto）
 

@@ -1,0 +1,20 @@
+# Tasks
+
+## Phase 1: Contracts
+- [x] T001 在 specs/002-consistent-model-contract 定义时间、标签、schema、模型包和接口契约。
+## Phase 2: US1
+- [x] T002 [US1] 修复 kairos/data/prepare_dataset.py 日历切分及 manifest，增加数据契约与回归。
+- [x] T003 [US1] 修复 kairos/training/dataset.py 连续窗口、严格外生校验及确定性采样。
+## Phase 3: US2
+- [x] T004 [US2] 修复 kairos/models/kronos_ext.py loss，训练标签、联合验证、DDP 早停和累积梯度。
+- [x] T005 [US2] 在 kairos/training/artifacts.py 实现独立运行和模型包，训练绑定 tokenizer/schema/数据版本。
+## Phase 4: US3
+- [x] T006 [US3] 新增 kairos/inference.py，共享真实推理和模型契约校验。
+- [x] T007 [US3] 修复 kairos/training/backtest_ic.py baseline、标签和统计口径。
+- [x] T008 [US3] 接通 kairos/deploy/serve.py 外生模型/分位数，修复 HF 上传契约。
+## Phase 5: Verification
+- [x] T009 更新现有 README/运维/评测文档并标注旧指标适用边界。
+- [x] T010 执行完整回归、CPU smoke、权重加载和端到端契约验收，修复 review/converge 遗漏。
+
+## Dependencies
+T001 后数据、训练、回测可按已确定接口并行；T006/T008 依赖共享契约；最后统一 T009/T010。

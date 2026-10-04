@@ -1,111 +1,58 @@
 # kairos-serve HTTP API
 
-`kairos-serve` 由 `kairos.deploy.serve` 实现。它加载 `KronosTokenizer` 和基础 `Kronos` predictor checkpoint，然后调用 `KronosPredictor.predict` 采样未来 K 线。
+API 0.3 使用 `kairos.inference.KairosPredictor`，与回测共享历史归一化、外生通道和收益头。
+只接受带 `kairos_manifest.json` 的 contract v2 模型包，目标是 `log(close[t+h]/close[t])`。
+旧版归一化价格差 checkpoint 必须重训，不能通过补写 manifest 转换。
 
-服务端**不负责抓交易所数据**。调用方必须在请求体里提供最近的 OHLCV bars。这样可以让服务部署不依赖 OKX 网络可用性，也避免 `/predict` 内部隐藏数据源行为。
-
-## 启动服务
+## 启动
 
 ```bash
-kairos-serve \
-  --tokenizer NeoQuasar/Kronos-Tokenizer-base \
-  --predictor NeoQuasar/Kronos-small \
-  --host 0.0.0.0 \
-  --port 8000
+kairos-serve --predictor artifacts/checkpoints/predictor/<run_id>/checkpoints/best_model \
+  --device cpu --host 127.0.0.1 --port 8000
 ```
 
-主要参数：
+模型目录必须整体保留：模型配置/权重、manifest、`tokenizer/` 快照。下载 Hugging Face 模型时先下载完整 snapshot。
+`--tokenizer` 不再用于替换模型绑定的 tokenizer；可省略，传入时必须是包内快照路径。
+默认使用 CUDA（可用时）或 CPU。上下文长度从模型包读取，不再提供 `--max-context` 覆盖。
+服务不采集行情或补抓历史。
 
-| 参数 | 必填 | 说明 |
-| --- | --- | --- |
-| `--tokenizer` | 是 | Hugging Face repo id 或本地 tokenizer checkpoint 路径 |
-| `--predictor` | 是 | Hugging Face repo id 或本地 Kronos predictor checkpoint 路径 |
-| `--device` | 否 | 默认优先 CUDA，其次 MPS，最后 CPU |
-| `--max-context` | 否 | 传给 `KronosPredictor` 的最大上下文长度 |
-| `--host` / `--port` | 否 | Uvicorn 监听地址 |
+## GET /health
 
-## `GET /health`
+返回 status、device、max_context（实际 lookback）、target、freq、return_horizon。
+这仅验证服务已加载模型，不证明数据源新鲜度或预测有效性。
 
-响应示例：
+## POST /predict
 
-```json
-{
-  "status": "ok",
-  "device": "cpu",
-  "max_context": 512
-}
-```
-
-## `POST /predict`
-
-请求字段：
-
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `symbol` | string | 是 | - | 交易所原生 symbol，例如 `BTC/USDT` |
-| `market_type` | string | 否 | `spot` | `spot` 或 `swap` |
-| `freq` | string | 否 | `1min` | `1min`、`3min`、`5min`、`15min`、`30min`、`60min`、`1h`、`2h`、`4h`、`1d`、`daily` |
-| `bars` | array | 是 | - | 至少 32 根 OHLCV bars |
-| `lookback` | int | 否 | `400` | 使用最近多少根 bars 作为上下文 |
-| `pred_len` | int | 否 | `30` | 向未来采样多少根 bars |
-| `T` | float | 否 | `0.6` | 采样温度 |
-| `top_p` | float | 否 | `0.9` | nucleus sampling 阈值 |
-| `top_k` | int | 否 | `0` | top-k 采样，`0` 表示关闭 |
-| `sample_count` | int | 否 | `5` | 采样轨迹数量 |
-
-`bars` 每一项字段：
-
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `datetime` | 是 | K 线时间戳，推荐 ISO-8601 |
-| `open` / `high` / `low` / `close` | 是 | 价格字段 |
-| `volume` | 是 | 调用方提供的基础币成交量或合约张数 |
-| `amount` | 否 | 计价币成交额；缺失时服务端用 `close * volume` 近似 |
-
-请求示例：
-
-```json
-{
-  "symbol": "BTC/USDT",
-  "market_type": "spot",
-  "freq": "1min",
-  "pred_len": 3,
-  "bars": [
-    {
-      "datetime": "2026-04-30T00:00:00Z",
-      "open": 70000.0,
-      "high": 70020.0,
-      "low": 69980.0,
-      "close": 70010.0,
-      "volume": 12.5,
-      "amount": 875125.0
-    }
-  ]
-}
-```
-
-真实请求必须提供至少 32 根 bars。
-
-响应字段：
-
-| 字段 | 说明 |
+| 字段 | 约束 |
 | --- | --- |
-| `symbol`、`market_type`、`freq` | 回传请求元数据 |
-| `last_close` | 输入序列最后一根 close |
-| `pred_close` | 预测 close 序列 |
-| `pred_mean_return` | 预测 close 相对 `last_close` 的平均收益 |
-| `pred_direction_prob_up` | 预测 close 高于 `last_close` 的比例 |
-| `forecast` | 未来 bar 对象，包含 time、open、high、low、close、volume |
+| symbol | 必填，非空，例如 BTC/USDT |
+| market_type | spot 或 swap；模型包标注时必须一致 |
+| freq | 默认 1min，必须与模型包的 bar 时长一致 |
+| bars | 不少于模型 lookback，至多 10000 根；升序、无重复，使用的末尾历史须连续 |
+| exog_cols | 启用外生通道时必填，等于 manifest 的有序 32 列 schema |
+| exog | 启用外生通道时必填，二维数值数组，逐行与 bars 对齐；所有值有限 |
+| lookback | 可省略，填写时必须等于模型契约 |
+| pred_len | 可省略，默认全部已训练期限；不得超出 return_horizon |
 
-## Curl 示例
+每根 bar 包含 datetime、open、high、low、close、volume、可选 amount。
+时间按 UTC 解释；OHLC 必须为有限正数，volume/amount 非负；缺失 amount 使用 close*volume。
+外生数值必须由同一版本的 `build_features` 及相同历史/sidecar 口径产生，不能把缺失通道当成任意零值。
+建议直接使用打包数据中的 exog 行构造离线验收请求。服务不对乱序或无效输入进行静默修复。
 
-```bash
-curl -s -X POST "http://127.0.0.1:8000/predict" \
-  -H "Content-Type: application/json" \
-  --data @request.json
-```
+## 响应
 
-## 注意事项
+- target 固定为 log_return，anchor_time 为最后一个可见 bar 的 UTC 时间。
+- quantile_levels 对应收益头的分位水平，例如 0.1、0.2、…、0.9。
+- forecast 每项包含 horizon、UTC time、log_return_quantiles、median_return、median_close、quantile_crossing。
+- median_return = exp(预测对数收益中位数)-1；median_close = last_close*exp(预测对数收益中位数)。
+- pred_close 是各期限 median_close 的便捷列表。
+- quantile_crossing 为 true 表示原始分位数发生交叉；服务不会排序并掩盖模型问题。
 
-- `kairos-serve` 当前走原版 Kronos predictor 路径，不是 32 维外生通道 predictor 路径。
-- 该接口适合快速服务演示。生产部署应在调用服务前校验上游 K 线归一化和时间戳单调性。
+API 0.3 不再返回 `pred_direction_prob_up`、`pred_mean_return` 或虚构的 OHLC/volume 预测。
+分位数并不自动构成经过校准的上涨概率。旧参数 T/top_p/top_k/sample_count 不适用于收益头并会被拒绝。
+
+## 错误与迁移
+
+请求结构错误返回 422；频率/schema/期限/时序不匹配返回 400；非有限模型结果返回 500。
+启动时旧模型包、tokenizer 哈希不符或模型配置冲突会明确失败。
+迁移时重新打包数据、训练 v2 模型、更新调用方请求/响应处理；保留旧实验和指标用于追溯。

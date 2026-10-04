@@ -100,14 +100,19 @@ python -m kairos.training.backtest_ic --baseline --preset crypto-1min \
   --dataset-path "$KAIROS_DATASET" --horizons 30 \
   --out artifacts/backtest_baseline.json
 
-python -m kairos.training.backtest_ic --ckpt artifacts/checkpoints/predictor/checkpoints/best_model \
+python -m kairos.training.backtest_ic --ckpt artifacts/checkpoints/predictor/<run_id>/checkpoints/best_model \
   --preset crypto-1min --dataset-path "$KAIROS_DATASET" --horizons 30 \
   --out artifacts/backtest_finetuned.json
 ```
 
+训练每次写入独立 `<run_id>` 目录，可用 `KAIROS_RUN_ID` 指定名称（已存在时拒绝覆盖）。
+新 checkpoint 是 contract v2 模型包，保存精确 tokenizer、数据摘要及配置；历史 checkpoint 保留，使用新收益语义须重训。
+回测使用原始 log-return、同一时间截面；旧实验指标与新口径不可直接比较。
+
 ## 服务接口
 
-`kairos-serve` 不负责抓交易所行情。`/predict` 接口接收 JSON body，字段包括 `symbol`、`market_type`、`freq`，以及 `bars` 数组。`bars` 每一项包含 `datetime`、`open`、`high`、`low`、`close`、`volume`，以及可选的 `amount`。
+`kairos-serve --predictor <本地v2模型包>` 与回测共享推理器。调用方提供 `symbol`、`market_type`、`freq`、OHLCV `bars` 和逐行对齐的有序 32 维 `exog`/`exog_cols`；服务不抓行情。
+响应包含各期限的对数收益分位数、收益/价格中位数，不再将预测路径占比称为上涨概率。旧请求与响应需按 [HTTP 契约](docs/SERVE_HTTP_API.md) 迁移。
 
 ## 仓库结构
 
@@ -133,7 +138,7 @@ tests/        # pytest smoke 和特征测试
 | 查看 5/15/30 统一窗口因子提案 | [docs/CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md](docs/CRYPTO_5_15_30_FACTOR_SCHEMA_PROPOSAL.md) |
 | 解释 IC 回测 | [docs/BACKTEST_IC_INTERPRETATION_GUIDE.md](docs/BACKTEST_IC_INTERPRETATION_GUIDE.md) |
 | 远程训练 | [docs/AUTODL_REMOTE_TRAINING_GUIDE.md](docs/AUTODL_REMOTE_TRAINING_GUIDE.md) |
-| 阅读当前最佳实验 | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
+| 阅读历史实验（旧评测口径） | [docs/CRYPTO_TOP100_1Y_SPOT_RUN.md](docs/CRYPTO_TOP100_1Y_SPOT_RUN.md) |
 
 ## 许可证
 

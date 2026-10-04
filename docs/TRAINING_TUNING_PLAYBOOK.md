@@ -1,5 +1,14 @@
 # Kairos Training Participation Troubleshooting Manual
 
+> 2026-10-05 契约更新：新版 predictor 在最后历史 bar 上监督原始 log-return 的 h=1..H，
+> 以 CE + pinball 联合验证损失选模。mask 按有效 horizon/quantile 元素归一化，旧权重系数与旧 CE 选模结果不直接可比。
+> `KAIROS_SMOKE=1 python -m kairos.training.train_predictor` 支持本机单 CPU；正式训练仍使用远程 GPU。
+> 每次运行写入 `artifacts/checkpoints/predictor/<run_id>/`，`KAIROS_RUN_ID` 已存在会拒绝覆盖；`KAIROS_SAVE_PATH` 可指定独立输出根。
+> `KAIROS_PRETRAINED_TOKENIZER` 明确指定 tokenizer，不再自动选择其它实验的 best_model。
+> 模型包保存 schema、频率、历史长度、tokenizer 和数据哈希；旧 checkpoint 必须重新训练，禁止补写 manifest 冒充新版。
+> 后文旧实验、固定 best_model 路径和仅看 val_ce 的调参记录作为历史背景保留；运行以本段和当前 CLI 为准。
+
+
 > Intended for readers with no experience tuning Transformer. Each step gives "Why do this / specific commands / common pitfalls".
 >
 > 📖 **Can’t understand the terminology? ** First go to [CONCEPTS_AND_GLOSSARY.md](CONCEPTS_AND_GLOSSARY.md) to check the meaning of words such as IC, Rank-IC, overfitting, distribution shift, early stopping, teacher forcing, etc.

@@ -26,6 +26,7 @@ from pathlib import Path
 from huggingface_hub import HfApi, create_repo
 
 from kairos.models import KronosWithExogenous
+from kairos.training.artifacts import load_manifest
 from kairos.vendor.kronos import Kronos, KronosTokenizer
 
 CARD_TOKENIZER_TMPL = """---
@@ -294,6 +295,7 @@ def main():
             raise SystemExit(f"predictor checkpoint {pred_dir} not found")
         print(f"[check] load predictor {pred_dir}")
         if args.predictor_class == "ext":
+            manifest = load_manifest(pred_dir)
             model = KronosWithExogenous.from_pretrained(str(pred_dir))
             desc = "Fine-tuned Kronos with exogenous channel + quantile return head."
         else:
@@ -315,6 +317,25 @@ def main():
             training_block=pred_card_parts["training_block"],
             recipe_block=pred_card_parts["recipe_block"],
         )
+        if args.predictor_class == "ext":
+            # A v2 bundle includes the exact tokenizer and target contract.
+            # Historical experiment claims in legacy cards do not describe it.
+            card = f'''---
+license: mit
+tags: [time-series, finance, kairos]
+library_name: pytorch
+---
+
+# {args.repo_predictor}
+
+Kairos contract v2. Predicts raw log returns for horizons 1 through {manifest['return_horizon']}
+from {manifest['lookback_window']} historical {manifest['freq']} bars.
+The ordered feature schema, training configuration, data hashes, and bundled tokenizer
+are recorded in `kairos_manifest.json`. Download the complete repository snapshot before
+using `kairos.inference.KairosPredictor.from_checkpoint(local_directory)`.
+
+{metrics_block or '_No quantitative metrics were supplied at upload time._'}
+'''
         if args.dry_run:
             print("[dry-run] would push predictor → ", args.repo_predictor)
         else:
