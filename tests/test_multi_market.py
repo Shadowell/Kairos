@@ -25,7 +25,7 @@ from kairos.data.prepare_dataset import parse_range, process_symbol
 def _synthetic_df(n: int = 300, start: str = "2020-01-01", freq: str = "B") -> pd.DataFrame:
     dates = pd.date_range(start, periods=n, freq=freq)
     rng = np.random.default_rng(7)
-    close = 10 + np.cumsum(rng.normal(0, 0.2, size=n))
+    close = 10 * np.exp(np.cumsum(rng.normal(0, 0.02, size=n)))
     high = close + rng.uniform(0, 0.3, size=n)
     low = close - rng.uniform(0, 0.3, size=n)
     open_ = close + rng.normal(0, 0.1, size=n)
@@ -136,17 +136,14 @@ def test_process_symbol_crypto_dispatches_through_adapter(tmp_path: Path):
     df.to_parquet(pq)
 
     # ranges inside the synthetic window so every split gets rows
-    ts0 = df["datetime"].iloc[0].strftime("%Y-%m-%d")
-    ts_mid1 = df["datetime"].iloc[400].strftime("%Y-%m-%d")
-    ts_mid2 = df["datetime"].iloc[600].strftime("%Y-%m-%d")
-    ts_end = df["datetime"].iloc[-1].strftime("%Y-%m-%d")
+    timestamps = df["datetime"].dt.strftime("%Y-%m-%dT%H:%M:%S")
 
     pieces = process_symbol(
         pq,
         index_df=None,
-        train_range=(ts0, ts_mid1),
-        val_range=(ts_mid1, ts_mid2),
-        test_range=(ts_mid2, ts_end),
+        train_range=(timestamps.iloc[0], timestamps.iloc[399]),
+        val_range=(timestamps.iloc[400], timestamps.iloc[599]),
+        test_range=(timestamps.iloc[600], timestamps.iloc[-1]),
         min_len=50,
         market="crypto",
         exog_cols=exog_cols_for("crypto"),

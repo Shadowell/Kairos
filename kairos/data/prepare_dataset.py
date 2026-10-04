@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from kairos.data.contracts import bar_delta, validate_exog_frame, validate_main_frame
 from kairos.data.features import build_features, exog_cols_for
 
 
@@ -74,11 +75,46 @@ def _slice(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return df.loc[mask].reset_index(drop=True)
 
 
+def _split_bounds(ranges: dict, split_mode: str) -> dict:
+    if split_mode not in ("time", "interleave"):
+        raise ValueError("split_mode must be 'time' or 'interleave'")
+    bounds = {name: _range_bounds(*value) for name, value in ranges.items()}
+    if split_mode == "interleave":
+        bounds = {
+            "fit": (min(bounds["train"][0], bounds["val"][0]),
+                    max(bounds["train"][1], bounds["val"][1])),
+            "test": bounds["test"],
+        }
+    ordered = sorted(bounds.items(), key=lambda item: item[1][0])
+    for (left, (_, left_end)), (right, (right_start, _)) in zip(ordered, ordered[1:]):
+        if right_start <= left_end:
+            raise ValueError(f"date ranges overlap: {left} and {right}")
+    return bounds
+
+
+def _calendar_val_blocks(start, end, val_ratio, block_days, rng):
+    if not 0 < val_ratio < 1:
+        raise ValueError("val_ratio must be between zero and one")
+    if not isinstance(block_days, (int, np.integer)) or block_days <= 0:
+        raise ValueError("block_days must be a positive integer")
+    lower, upper = _range_bounds(str(start), str(end))
+    origin = lower.normalize()
+    n_blocks = (upper.normalize() - origin).days // block_days + 1
+    if n_blocks < 2:
+        raise ValueError("interleave requires at least two calendar blocks")
+    n_val = min(n_blocks - 1, max(1, int(round(n_blocks * val_ratio))))
+    selected = np.sort(rng.choice(n_blocks, size=n_val, replace=False))
+    return origin, selected
+
+
 def _interleave_trainval(
     df: pd.DataFrame,
     val_ratio: float,
     block_days: int,
     rng: np.random.Generator,
+    *,
+    fit_start=None,
+    fit_end=None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Block-level interleaved train/val split inside the train period.
 
@@ -88,15 +124,14 @@ def _interleave_trainval(
     """
     if df.empty:
         return df, df
-    df = df.sort_values("datetime").reset_index(drop=True)
-    n = len(df)
-    n_blocks = max(1, (n + block_days - 1) // block_days)
-    block_ids = np.minimum(np.arange(n) // block_days, n_blocks - 1)
-    all_blocks = np.arange(n_blocks)
-    n_val = max(1, int(round(n_blocks * val_ratio)))
-    val_blocks = set(rng.choice(all_blocks, size=n_val, replace=False).tolist())
-
-    is_val = np.array([b in val_blocks for b in block_ids])
+    dates = pd.to_datetime(df["datetime"], utc=True)
+    origin, val_blocks = _calendar_val_blocks(
+        fit_start if fit_start is not None else dates.min(),
+        fit_end if fit_end is not None else dates.max(),
+        val_ratio, block_days, rng,
+    )
+    block_ids = (dates.dt.normalize() - origin).dt.days // block_days
+    is_val = block_ids.isin(val_blocks).to_numpy()
     return df.loc[~is_val].reset_index(drop=True), df.loc[is_val].reset_index(drop=True)
 
 
@@ -114,6 +149,7 @@ def process_symbol(
     market: str = "crypto",
     exog_cols: Optional[list[str]] = None,
     extras: Optional[dict] = None,
+    freq: str = "1min",
 ):
     """Build per-symbol train/val/test frames.
 
@@ -123,6 +159,8 @@ def process_symbol(
     - ``"interleave"``: train+val are merged, split into blocks, and sampled
       block-wise for validation. Test remains a separate fixed date range.
     """
+    bar_delta(freq)
+    bounds = _split_bounds({"train": train_range, "val": val_range, "test": test_range}, split_mode)
     df = pd.read_parquet(path)
     if "datetime" not in df.columns:
         df = df.reset_index()
@@ -135,6 +173,10 @@ def process_symbol(
         df["amount"] = df["close"] * df["volume"]
     else:
         df["amount"] = df["amount"].fillna(df["close"] * df["volume"])
+
+    # Validate before feature construction, which otherwise sorts invalid bars.
+    main = validate_main_frame(df.rename(columns={"volume": "vol", "amount": "amt"}))
+    df["datetime"] = main.index
 
     df = build_features(
         df, index_df, market=market, symbol=path.stem, extras=extras,
@@ -151,16 +193,14 @@ def process_symbol(
 
     if split_mode == "interleave":
         # Merge train+val into the fit window, then sample validation blocks.
-        train_bounds = _range_bounds(*train_range)
-        val_bounds = _range_bounds(*val_range)
-        fit_start = min(train_bounds[0], val_bounds[0]).isoformat()
-        fit_end = max(train_bounds[1], val_bounds[1]).isoformat()
+        fit_start, fit_end = (value.isoformat() for value in bounds["fit"])
         fit_df = _slice(df.reset_index(), fit_start, fit_end)
         test_df = _slice(df.reset_index(), *test_range)
         if rng is None:
             rng = np.random.default_rng(0)
         train_df, val_df = _interleave_trainval(
-            fit_df, interleave_val_ratio, interleave_block_days, rng)
+            fit_df, interleave_val_ratio, interleave_block_days, rng,
+            fit_start=fit_start, fit_end=fit_end)
         splits = {
             "train": train_df.set_index("datetime") if not train_df.empty else train_df,
             "val":   val_df.set_index("datetime") if not val_df.empty else val_df,
@@ -177,13 +217,11 @@ def process_symbol(
     for name, part in splits.items():
         if part.empty:
             continue
-        if part[main_cols].isna().any().any():
-            part = part.dropna(subset=main_cols)
-        if part.empty:
-            continue
+        main = validate_main_frame(part[main_cols].astype("float32"))
+        exog = validate_exog_frame(main, part[exog_cols].astype("float32"), exog_cols)
         out[name] = {
-            "main": part[main_cols].astype("float32"),
-            "exog": part[exog_cols].astype("float32"),
+            "main": main,
+            "exog": exog,
         }
     return out
 
@@ -208,6 +246,7 @@ def main():
     ap.add_argument("--block-days", type=int, default=20,
                     help="Block size in days for interleave mode")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--freq", default="1min", help="Native bar frequency (default: 1min)")
     ap.add_argument("--market", default="crypto",
                     help="which MarketAdapter to use for the feature builder "
                          "(default: crypto). The adapter dictates which 8 market-specific "
@@ -218,19 +257,14 @@ def main():
 
     try:
         ranges = {name: parse_range(getattr(args, name)) for name in ("train", "val", "test")}
-        bounds = {name: _range_bounds(*value) for name, value in ranges.items()}
+        bounds = _split_bounds(ranges, args.split_mode)
+        bar_delta(args.freq)
+        calendar_split = None
+        if args.split_mode == "interleave":
+            calendar_split = _calendar_val_blocks(
+                *bounds["fit"], args.val_ratio, args.block_days, np.random.default_rng(args.seed))
     except (ValueError, TypeError) as exc:
-        ap.error(f"invalid date range: {exc}")
-    if args.split_mode == "interleave":
-        bounds = {
-            "fit": (min(bounds["train"][0], bounds["val"][0]),
-                    max(bounds["train"][1], bounds["val"][1])),
-            "test": bounds["test"],
-        }
-    ordered = sorted(bounds.items(), key=lambda item: item[1][0])
-    for (left, (_, left_end)), (right, (right_start, _)) in zip(ordered, ordered[1:]):
-        if right_start <= left_end:
-            ap.error(f"date ranges overlap: {left} and {right}")
+        ap.error(f"invalid dataset configuration: {exc}")
 
     exog_cols = exog_cols_for(args.market)
     print(f"[market] {args.market}; exog_dim={len(exog_cols)}")
@@ -276,7 +310,6 @@ def main():
     train_data, val_data, test_data = {}, {}, {}
     exog_train, exog_val, exog_test = {}, {}, {}
 
-    master_rng = np.random.default_rng(args.seed)
     print(f"[split] mode={args.split_mode}", end="")
     if args.split_mode == "interleave":
         print(f" val_ratio={args.val_ratio} block_days={args.block_days}", end="")
@@ -284,8 +317,8 @@ def main():
 
     for p in tqdm(paths, ncols=100):
         sym = p.stem
-        # Independent per-symbol RNG keeps interleave splits reproducible.
-        sub_rng = np.random.default_rng(master_rng.integers(0, 2**31 - 1))
+        # Reuse the same seed and fit bounds so every symbol shares blocks.
+        sub_rng = np.random.default_rng(args.seed)
         sym_extras: Optional[dict] = None
         if extras_channels:
             from kairos.data import crypto_extras as _ce
@@ -309,6 +342,7 @@ def main():
                 market=args.market,
                 exog_cols=exog_cols,
                 extras=sym_extras,
+                freq=args.freq,
             )
         except Exception as e:
             print(f"[{sym}] failed: {e}")
@@ -348,8 +382,10 @@ def main():
     import json
 
     meta = {
+        "schema_version": 2,
         "market": args.market,
         "market_type": args.market_type,
+        "freq": args.freq,
         "exog_cols": exog_cols,
         "split_mode": args.split_mode,
         "ranges": {
@@ -358,6 +394,14 @@ def main():
             "test": args.test,
         },
         "extras_channels": extras_channels,
+        "split_parameters": {
+            "seed": args.seed,
+            "val_ratio": args.val_ratio,
+            "block_days": args.block_days,
+            "calendar_timezone": "UTC",
+            "block_origin": calendar_split[0].isoformat() if calendar_split else None,
+            "validation_blocks": calendar_split[1].tolist() if calendar_split else [],
+        },
     }
     with open(out_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
